@@ -1,0 +1,47 @@
+# --- 個人/チーム環境（所属情報を含むため絶対にコミットしない） ---
+.claude
+CLAUDE.md
+CLAUDE.local.md
+
+# --- 配布資料・提出用 PDF（講座資料は再配布しない／レポートは omnicampus へ直接提出） ---
+*.pdf
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- 秘密情報 ---
+.env
+.env.*
+
+# --- AI モデルの重み（大容量・ライセンス別管理。実行時にダウンロードする） ---
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.bin
+weights/
+checkpoints/
+
+# --- 生成物（動画・画像・ログ） ---
+outputs/
+*.mp4
+*.mov
+*.avi
+*.gif
+MUJOCO_LOG.TXT
+*.log
+
+# --- OS / エディタ ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*:Zone.Identifier
+.vscode/
+.idea/
