@@ -80,6 +80,10 @@ class PushRewardTerms:
         """ログ出力用に、項の名前 → 値の対応を返す。"""
         return {field.name: getattr(self, field.name) for field in fields(self)}
 
+    def zeroed_where(self, mask: torch.Tensor) -> "PushRewardTerms":
+        """mask (num_envs,) が True の環境の値を、すべての項で 0 にした項を返す。"""
+        return PushRewardTerms(**{name: torch.where(mask, 0.0, value) for name, value in self.named().items()})
+
 
 PUSH_REWARD_TERM_NAMES: tuple[str, ...] = tuple(field.name for field in fields(PushRewardTerms))
 

@@ -39,3 +39,21 @@ def relative_xy_in_robot_frame(
         robot_yaw_rad: ロボットのヨー角 (num_envs,)。
     """
     return rotate_world_to_robot_xy(target_world_xy - robot_world_xy, robot_yaw_rad)
+
+
+def yaw_from_quat_wxyz(quat_wxyz: torch.Tensor) -> torch.Tensor:
+    """姿勢の四元数 (num_envs, 4)（w, x, y, z の順）から、ヨー角 (num_envs,) [rad] を返す。
+
+    胴体の前方の軸を水平面に射影した向きの角度。傾いていても、前方の軸が鉛直でなければ定まる。
+    """
+    w, x, y, z = quat_wxyz.unbind(dim=1)
+    return torch.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+
+
+def up_axis_world_z_from_quat_wxyz(quat_wxyz: torch.Tensor) -> torch.Tensor:
+    """姿勢の四元数 (num_envs, 4)（w, x, y, z の順）で回した上向きの軸の、ワールドの z 成分 (num_envs,) を返す。
+
+    1 で水平、0 で横倒し。傾きの角度は push_evaluation.tilt_deg で求める。
+    """
+    _, x, y, _ = quat_wxyz.unbind(dim=1)
+    return 1 - 2 * (x * x + y * y)

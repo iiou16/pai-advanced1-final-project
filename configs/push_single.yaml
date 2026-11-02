@@ -1,0 +1,66 @@
+# 1 台の箱押し（シーン S1_push）の高レベル方策の学習環境の設定。
+# 値は初期値で、規則ベースで押す実験（P2-02）と学習（P2-07）で調整する。
+# すべてのキーが必須。読み込み時に過不足・型・値の範囲を検証し、歩行方策を読み込んだ後に、
+# 歩行方策の学習時の設定（gait_policy.run_dir の gait.yaml）と矛盾しないことを確かめる。
+
+# シーン（箱の寸法・質量・摩擦、Genesis の接触の設定）
+scene_config: configs/scenes/s1_push.yaml
+
+# 固定して使う歩行方策（P1-04 で学習したもの）。学習時の設定の写し（gait.yaml）も同じディレクトリから読む
+gait_policy:
+  run_dir: outputs/gait/gait-command-tracking
+  checkpoint: 1500
+
+task:
+  episode:
+    # 学習の並列環境の数。GPU のメモリと速度は P2-07 で計測して決める
+    num_envs: 1024
+    # 高レベル方策の周期 10 Hz。歩行方策（50 Hz）を 5 回呼ぶ
+    high_level_period_s: 0.1
+    episode_length_s: 20.0
+    # 転倒とみなす傾き。歩行方策の学習時の終了条件（10°）より緩くしない（それ以上傾いた状態を歩行方策は知らない）
+    fall_roll_deg: 10.0
+    fall_pitch_deg: 10.0
+
+  # 高レベル方策が出せる速度指令。歩行方策が学習した範囲（vx [-0.5, 1.0]、vy [-0.4, 0.4]、yaw [-1.2, 1.2]）の内側にする
+  commands:
+    vx_mps: {low: -0.3, high: 0.6}
+    vy_mps: {low: -0.3, high: 0.3}
+    yaw_rate_radps: {low: -1.0, high: 1.0}
+
+  # エピソードの始めの配置。最初は箱をロボットの正面に置き、目標も箱の正面（+x）に置く（カリキュラムの第 1 段階）
+  reset:
+    box_xy_jitter_m: 0.1
+    goal_distance_m: {low: 1.0, high: 1.0}
+    goal_direction_deg: {low: 0.0, high: 0.0}
+
+  success:
+    goal_radius_m: 0.3
+    # 成功とみなす維持時間は P2-02 で確定して requirements.md に書く
+    hold_time_s: 1.0
+
+  # シーンの有効範囲。外に出た箱やロボットはシーン外への離脱として終える
+  arena:
+    half_extent_x_m: 5.0
+    half_extent_y_m: 5.0
+
+  divergence:
+    # 歩行でも押す動作でも起こりえない速さ
+    max_speed_mps: 10.0
+
+  observation:
+    position: 1.0
+    lin_vel: 2.0
+    ang_vel: 0.25
+
+  reward:
+    # ロボット → 箱の向きと箱 → 目標の向きのなす角が約 25° 以内なら、意図した面を押しているとみなす
+    intended_face_min_cos: 0.9
+    scales:
+      box_progress: 10.0
+      success: 10.0
+      intended_face_contact: 0.1
+      box_rotation: -0.5
+      robot_fall: -10.0
+      unsafe_collision: -1.0
+      control_effort: -0.01

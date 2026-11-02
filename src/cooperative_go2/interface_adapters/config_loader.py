@@ -15,6 +15,7 @@ from cooperative_go2.entities.config_validation import InvalidConfigError
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_evaluation import GaitEvaluationSuite, InvalidEvaluationScenarioError
 from cooperative_go2.entities.push_scene_config import BoxConfig
+from cooperative_go2.entities.push_task_config import PushTaskConfig
 from cooperative_go2.interface_adapters.genesis_scene_config import GenesisSceneConfig, require_genesis_friction
 from cooperative_go2.interface_adapters.rsl_rl_config import RslRlPpoConfig
 
@@ -48,6 +49,35 @@ class PushSceneSettings:
     def __post_init__(self) -> None:
         # 箱の摩擦はドメインとしては正の値なら意味を持つが、Genesis が受け付ける範囲は狭いため、ここで早めに弾く
         require_genesis_friction("box.friction", self.box.friction)
+
+
+@dataclass(frozen=True)
+class GaitPolicySource:
+    """固定して使う歩行方策の出所。
+
+    Attributes:
+        run_dir: 歩行学習の出力先（設定の写し gait.yaml とチェックポイントがあるディレクトリ）。
+            相対パスは現在の作業ディレクトリ起点。
+        checkpoint: 読み込むチェックポイントの反復番号（model_<番号>.pt）。
+    """
+
+    run_dir: str
+    checkpoint: int
+
+
+@dataclass(frozen=True)
+class PushTrainingSettings:
+    """1 台の箱押しの設定ファイル（configs/push_single.yaml）1 つ分。
+
+    Attributes:
+        scene_config: シーンの設定ファイル（configs/scenes/s1_push.yaml 形式）。相対パスは現在の作業ディレクトリ起点。
+        gait_policy: 固定して使う歩行方策の出所。
+        task: 学習環境の設定。内側の層に渡す。
+    """
+
+    scene_config: str
+    gait_policy: GaitPolicySource
+    task: PushTaskConfig
 
 
 def load_gait_settings(path: Path) -> GaitSettings:
@@ -87,6 +117,30 @@ def load_push_scene_settings(path: Path) -> PushSceneSettings:
         ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
     """
     return parse_push_scene_settings(_read_yaml(path))
+
+
+def load_push_training_settings(path: Path) -> PushTrainingSettings:
+    """1 台の箱押しの設定ファイル（configs/push_single.yaml 形式）を読み込み、検証済みの設定を返す。
+
+    歩行方策の学習時の設定との突き合わせは、歩行方策を読み込んだ後に require_compatible_with_gait() で行う。
+
+    Args:
+        path: 設定ファイル。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
+    """
+    return parse_push_training_settings(_read_yaml(path))
+
+
+def parse_push_training_settings(data: object) -> PushTrainingSettings:
+    """YAML を読み込んだ値（dict）から、検証済みの箱押しの設定を作る。
+
+    Raises:
+        ConfigValidationError: キーの過不足・型・値が不正。
+    """
+    return _build_dataclass(PushTrainingSettings, data, _ROOT_KEY_PATH)
 
 
 def parse_push_scene_settings(data: object) -> PushSceneSettings:
