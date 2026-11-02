@@ -8,12 +8,16 @@ import torch
 from rsl_rl.runners import OnPolicyRunner
 
 from cooperative_go2.entities.gait_config import GaitConfig
-from cooperative_go2.entities.gait_observation import GaitObservationInputs, build_gait_observation
+from cooperative_go2.entities.gait_observation import (
+    GAIT_OBSERVATION_DIM,
+    GaitObservationInputs,
+    build_gait_observation,
+)
 from cooperative_go2.entities.go2_state import Go2Proprioception
 from cooperative_go2.interface_adapters.config_loader import load_gait_settings
 from cooperative_go2.interface_adapters.gait_checkpoint import checkpoint_path, load_gait_controller
 from cooperative_go2.interface_adapters.gait_run_store import RUN_CONFIG_FILENAME
-from cooperative_go2.interface_adapters.rsl_rl_gait import GaitPolicySpecEnvironment
+from cooperative_go2.interface_adapters.rsl_rl_gait import GaitPolicySpecEnvironment, load_rsl_rl_gait_policy
 from cooperative_go2.use_cases.gait_controller import GaitController, InvalidVelocityCommandShapeError
 
 DEVICE = "cpu"
@@ -145,9 +149,10 @@ def test_same_checkpoint_and_inputs_give_identical_joint_targets(run_dir: Path) 
         assert torch.equal(first_step, second_step)
 
 
-def test_loaded_policy_parameters_are_frozen(run_dir: Path) -> None:
-    controller = load_gait_controller(run_dir, CHECKPOINT_ITERATION, NUM_ROBOTS, DEVICE)
+def test_loaded_policy_does_not_track_gradients_even_outside_no_grad(run_dir: Path, gait_config_path: Path) -> None:
+    rsl_rl_config = load_gait_settings(gait_config_path).rsl_rl
+    policy = load_rsl_rl_gait_policy(checkpoint_path(run_dir, CHECKPOINT_ITERATION), rsl_rl_config, DEVICE)
 
-    joint_targets = controller.compute_joint_targets(_proprioception(), _commands())
+    actions = policy(torch.zeros(NUM_ROBOTS, GAIT_OBSERVATION_DIM))
 
-    assert not joint_targets.requires_grad
+    assert not actions.requires_grad
