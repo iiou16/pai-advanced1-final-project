@@ -31,12 +31,17 @@ sudo add-apt-repository -y universe
 sudo apt update
 sudo apt install -y curl
 
-ros_apt_source_version="$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest \
-  | grep -F '"tag_name"' | awk -F'"' '{print $4}')"
-if [[ -z "${ros_apt_source_version}" ]]; then
-  echo "ERROR: ros-apt-source の最新リリース取得に失敗した (GitHub API)。" >&2
+# set -e のもとでパイプラインの途中が失敗すると診断を出さずに終了するため、取得と解析を分けて失敗を個別に報告する
+readonly ROS_APT_SOURCE_RELEASE_API="https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest"
+release_json="$(curl -fsS "${ROS_APT_SOURCE_RELEASE_API}")" || {
+  echo "ERROR: ros-apt-source の最新リリース情報を取得できない: ${ROS_APT_SOURCE_RELEASE_API}" >&2
   exit 1
-fi
+}
+ros_apt_source_version="$(grep -F '"tag_name"' <<<"${release_json}" | awk -F'"' '{print $4}')" || {
+  echo "ERROR: リリース情報に tag_name が無い (GitHub API のレート制限の可能性):" >&2
+  echo "${release_json}" >&2
+  exit 1
+}
 
 download_dir="$(mktemp -d)"
 trap 'rm -rf "${download_dir}"' EXIT
