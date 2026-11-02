@@ -10,6 +10,8 @@ SIM_DT_S = 0.01
 SIM_STEPS = 300  # 3 秒。ウィンドウ表示を目視確認できる長さ
 BOX_SIZE_M = 0.2
 BOX_DROP_HEIGHT_M = 1.0
+CAMERA_POS = (2.5, -2.5, 1.5)
+CAMERA_LOOKAT = (0.0, 0.0, 0.3)
 
 
 def main() -> None:
@@ -17,9 +19,7 @@ def main() -> None:
     gs.init(backend=gs.cuda, logging_level="warning")
     scene = gs.Scene(
         sim_options=gs.options.SimOptions(dt=SIM_DT_S),
-        viewer_options=gs.options.ViewerOptions(
-            camera_pos=(2.5, -2.5, 1.5), camera_lookat=(0.0, 0.0, 0.3)
-        ),
+        viewer_options=gs.options.ViewerOptions(camera_pos=CAMERA_POS, camera_lookat=CAMERA_LOOKAT),
         show_viewer=True,
     )
     scene.add_entity(gs.morphs.Plane())
