@@ -11,9 +11,10 @@ from typing import get_args, get_origin, get_type_hints
 
 import yaml
 
-from cooperative_go2.entities.gait_config import GaitConfig, InvalidGaitConfigError
+from cooperative_go2.entities.config_validation import InvalidConfigError
+from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_evaluation import GaitEvaluationSuite, InvalidEvaluationScenarioError
-from cooperative_go2.interface_adapters.rsl_rl_config import InvalidRslRlConfigError, RslRlPpoConfig
+from cooperative_go2.interface_adapters.rsl_rl_config import RslRlPpoConfig
 
 _ROOT_KEY_PATH = "<root>"
 # 歩行の設定ファイルのうち、RSL-RL 固有の設定を書く節の名前
@@ -101,7 +102,7 @@ def _build_dataclass[T](cls: type[T], data: object, key_path: str) -> T:
     # 不変条件の違反は、どの設定でも「設定ファイルを直すべき」点で同じなので同じ例外に変換する
     try:
         return cls(**kwargs)
-    except (InvalidGaitConfigError, InvalidRslRlConfigError, InvalidEvaluationScenarioError) as error:
+    except (InvalidConfigError, InvalidEvaluationScenarioError) as error:
         raise ConfigValidationError(f"{key_path}: {error}") from error
 
 

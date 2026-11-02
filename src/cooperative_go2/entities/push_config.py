@@ -4,27 +4,16 @@
 各クラスは生成時に値の不変条件を検証し、違反すれば InvalidPushConfigError を送出する。
 """
 
-import math
 from dataclasses import dataclass, fields
 
-# 時間の比を切り上げるときの丸め桁数。0.1 のような 2 進で割り切れない周期の丸め誤差で 1 ステップ多く数えないようにする
-_RATIO_ROUND_DIGITS = 9
+from cooperative_go2.entities.config_validation import ConfigValueChecker, InvalidConfigError, ceil_ratio
 
 
-class InvalidPushConfigError(ValueError):
-    """箱押しの設定値が不変条件（正の値、値域など）を満たさないことを表す。"""
+class InvalidPushConfigError(InvalidConfigError):
+    """箱押しの設定値が不変条件（有限の値、正の値、値域など）を満たさないことを表す。"""
 
 
-# NaN は大小の比較がすべて偽になり「0 以下か」の検査をすり抜けるため、有限かどうかを先に調べる
-def _require_finite(name: str, value: float) -> None:
-    if not math.isfinite(value):
-        raise InvalidPushConfigError(f"{name} は有限の値が必要: {value}")
-
-
-def _require_positive(name: str, value: float) -> None:
-    _require_finite(name, value)
-    if value <= 0:
-        raise InvalidPushConfigError(f"{name} は正の値が必要: {value}")
+_check = ConfigValueChecker(InvalidPushConfigError)
 
 
 @dataclass(frozen=True)
@@ -40,8 +29,8 @@ class PushSuccessConfig:
     hold_time_s: float
 
     def __post_init__(self) -> None:
-        _require_positive("success.goal_radius_m", self.goal_radius_m)
-        _require_positive("success.hold_time_s", self.hold_time_s)
+        _check.positive("success.goal_radius_m", self.goal_radius_m)
+        _check.positive("success.hold_time_s", self.hold_time_s)
 
     def required_hold_steps(self, control_dt_s: float) -> int:
         """hold_time_s を、高レベル方策の制御ステップ数に換算して返す（端数は切り上げ）。
@@ -49,8 +38,8 @@ class PushSuccessConfig:
         Args:
             control_dt_s: 高レベル方策の制御周期 [s]。正の値でなければ InvalidPushConfigError を送出する。
         """
-        _require_positive("control_dt_s", control_dt_s)
-        return math.ceil(round(self.hold_time_s / control_dt_s, _RATIO_ROUND_DIGITS))
+        _check.positive("control_dt_s", control_dt_s)
+        return ceil_ratio(self.hold_time_s, control_dt_s)
 
 
 @dataclass(frozen=True)
@@ -66,8 +55,8 @@ class PushArenaConfig:
     half_extent_y_m: float
 
     def __post_init__(self) -> None:
-        _require_positive("arena.half_extent_x_m", self.half_extent_x_m)
-        _require_positive("arena.half_extent_y_m", self.half_extent_y_m)
+        _check.positive("arena.half_extent_x_m", self.half_extent_x_m)
+        _check.positive("arena.half_extent_y_m", self.half_extent_y_m)
 
 
 @dataclass(frozen=True)
@@ -81,7 +70,7 @@ class PushDivergenceConfig:
     max_speed_mps: float
 
     def __post_init__(self) -> None:
-        _require_positive("divergence.max_speed_mps", self.max_speed_mps)
+        _check.positive("divergence.max_speed_mps", self.max_speed_mps)
 
 
 @dataclass(frozen=True)
@@ -99,9 +88,9 @@ class PushObservationScales:
     ang_vel: float
 
     def __post_init__(self) -> None:
-        _require_positive("observation.position", self.position)
-        _require_positive("observation.lin_vel", self.lin_vel)
-        _require_positive("observation.ang_vel", self.ang_vel)
+        _check.positive("observation.position", self.position)
+        _check.positive("observation.lin_vel", self.lin_vel)
+        _check.positive("observation.ang_vel", self.ang_vel)
 
 
 @dataclass(frozen=True)
@@ -118,7 +107,7 @@ class PushRewardScales:
 
     def __post_init__(self) -> None:
         for field in fields(self):
-            _require_finite(f"reward.scales.{field.name}", getattr(self, field.name))
+            _check.finite(f"reward.scales.{field.name}", getattr(self, field.name))
 
 
 @dataclass(frozen=True)
@@ -169,11 +158,11 @@ class RuleBasedPushConfig:
     align_min_cos: float
 
     def __post_init__(self) -> None:
-        _require_positive("rule_based.approach_speed_mps", self.approach_speed_mps)
-        _require_positive("rule_based.push_speed_mps", self.push_speed_mps)
-        _require_positive("rule_based.yaw_gain_per_s", self.yaw_gain_per_s)
-        _require_positive("rule_based.max_yaw_rate_radps", self.max_yaw_rate_radps)
-        _require_positive("rule_based.standoff_m", self.standoff_m)
-        _require_positive("rule_based.side_offset_m", self.side_offset_m)
+        _check.positive("rule_based.approach_speed_mps", self.approach_speed_mps)
+        _check.positive("rule_based.push_speed_mps", self.push_speed_mps)
+        _check.positive("rule_based.yaw_gain_per_s", self.yaw_gain_per_s)
+        _check.positive("rule_based.max_yaw_rate_radps", self.max_yaw_rate_radps)
+        _check.positive("rule_based.standoff_m", self.standoff_m)
+        _check.positive("rule_based.side_offset_m", self.side_offset_m)
         if not -1.0 <= self.align_min_cos <= 1.0:
             raise InvalidPushConfigError(f"rule_based.align_min_cos は -1 以上 1 以下が必要: {self.align_min_cos}")

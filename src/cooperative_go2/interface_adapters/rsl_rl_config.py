@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from rsl_rl.utils import resolve_nn_activation
 
+from cooperative_go2.entities.config_validation import ConfigValueChecker, InvalidConfigError
+
 # RSL-RL の PPO が学習率を変える方式。adaptive は KL ダイバージェンスが desired_kl に近づくよう調整し、fixed は変えない
 ALLOWED_SCHEDULES = ("adaptive", "fixed")
 TENSORBOARD_LOGGER = "tensorboard"
@@ -16,18 +18,11 @@ POLICY_OBSERVATION_GROUP = "policy"
 OBSERVATION_GROUPS = {"actor": [POLICY_OBSERVATION_GROUP], "critic": [POLICY_OBSERVATION_GROUP]}
 
 
-class InvalidRslRlConfigError(ValueError):
+class InvalidRslRlConfigError(InvalidConfigError):
     """RSL-RL の設定値が、RSL-RL の受け付ける値や値域を満たさないことを表す。"""
 
 
-def _require_positive(name: str, value: float) -> None:
-    if value <= 0:
-        raise InvalidRslRlConfigError(f"{name} は正の値が必要: {value}")
-
-
-def _require_unit_interval(name: str, value: float) -> None:
-    if not 0 <= value <= 1:
-        raise InvalidRslRlConfigError(f"{name} は [0, 1] が必要: {value}")
+_check = ConfigValueChecker(InvalidRslRlConfigError)
 
 
 def _require_hidden_dims(name: str, dims: tuple[int, ...]) -> None:
@@ -68,11 +63,10 @@ class RslRlPpoConfig:
             "num_mini_batches", "value_loss_coef", "num_steps_per_env", "init_noise_std", "save_interval",
         )  # fmt: skip
         for name in positive_fields:
-            _require_positive(f"rsl_rl.{name}", getattr(self, name))
-        _require_unit_interval("rsl_rl.gamma", self.gamma)
-        _require_unit_interval("rsl_rl.lam", self.lam)
-        if self.entropy_coef < 0:
-            raise InvalidRslRlConfigError(f"rsl_rl.entropy_coef は 0 以上が必要: {self.entropy_coef}")
+            _check.positive(f"rsl_rl.{name}", getattr(self, name))
+        _check.unit_interval("rsl_rl.gamma", self.gamma)
+        _check.unit_interval("rsl_rl.lam", self.lam)
+        _check.non_negative("rsl_rl.entropy_coef", self.entropy_coef)
         if self.schedule not in ALLOWED_SCHEDULES:
             raise InvalidRslRlConfigError(f"rsl_rl.schedule は {ALLOWED_SCHEDULES} のいずれか: {self.schedule!r}")
         _require_hidden_dims("rsl_rl.actor_hidden_dims", self.actor_hidden_dims)
