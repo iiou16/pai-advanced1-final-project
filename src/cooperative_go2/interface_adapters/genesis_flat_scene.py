@@ -83,8 +83,19 @@ def build_flat_scene(config: GaitConfig, camera_spec: CameraSpec | None) -> Flat
         camera_spec: 評価動画を撮る場合のカメラ。None ならカメラを置かない。
 
     Raises:
-        SimulationSetupError: Genesis がシーンを構築できなかった。
+        SimulationSetupError: Genesis がシーンを構築できなかった（アセットの読み込み失敗、設定値の不整合など）。
     """
+    try:
+        flat_scene = _create_and_build_scene(config, camera_spec)
+    except gs.GenesisException as error:
+        raise SimulationSetupError(f"シーン S0_flat を構築できない: {error}") from error
+    if flat_scene.camera is not None:
+        # build 時点のカメラとロボットの相対位置を保ったまま、向きを変えずに追従する
+        flat_scene.camera.follow_entity(flat_scene.robot, fix_orientation=True)
+    return flat_scene
+
+
+def _create_and_build_scene(config: GaitConfig, camera_spec: CameraSpec | None) -> FlatScene:
     env_config = config.env
     scene = gs.Scene(
         sim_options=gs.options.SimOptions(dt=env_config.control_dt_s, substeps=env_config.substeps),
@@ -111,11 +122,5 @@ def build_flat_scene(config: GaitConfig, camera_spec: CameraSpec | None) -> Flat
             fov=camera_spec.fov_deg,
             GUI=False,
         )
-    try:
-        scene.build(n_envs=env_config.num_envs)
-    except gs.GenesisException as error:
-        raise SimulationSetupError(f"シーン S0_flat を構築できない: {error}") from error
-    if camera is not None:
-        # build 時点のカメラとロボットの相対位置を保ったまま、向きを変えずに追従する
-        camera.follow_entity(robot, fix_orientation=True)
+    scene.build(n_envs=env_config.num_envs)
     return FlatScene(scene=scene, robot=robot, camera=camera)

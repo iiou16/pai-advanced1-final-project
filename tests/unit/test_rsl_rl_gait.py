@@ -66,6 +66,15 @@ def test_checkpoint_with_different_network_is_rejected(checkpoint_path, rsl_rl_c
     assert isinstance(exc_info.value.__cause__, RuntimeError)
 
 
+def test_empty_checkpoint_is_rejected(tmp_path, rsl_rl_config) -> None:
+    empty_checkpoint = tmp_path / "model_0.pt"
+    empty_checkpoint.write_bytes(b"")
+
+    with pytest.raises(CheckpointLoadError) as exc_info:
+        load_rsl_rl_gait_policy(empty_checkpoint, rsl_rl_config, DEVICE)
+    assert isinstance(exc_info.value.__cause__, EOFError)
+
+
 def test_spec_environment_cannot_be_stepped() -> None:
     with pytest.raises(RuntimeError):
         GaitPolicySpecEnvironment(DEVICE).step(torch.zeros(1, 12))

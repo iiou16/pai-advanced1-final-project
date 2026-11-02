@@ -113,9 +113,13 @@ def load_rsl_rl_gait_policy(
         raise CheckpointNotFoundError(f"チェックポイントが無い: {checkpoint_path}")
     runner_cfg = rsl_rl_config.to_runner_cfg(checkpoint_path.parent.name)
     runner = OnPolicyRunner(GaitPolicySpecEnvironment(device), runner_cfg, None, device=str(device))
-    # 壊れたファイル（UnpicklingError）も構成の不一致（RuntimeError）も、チェックポイントを使えない点で同じ扱いにする
     try:
         runner.load(str(checkpoint_path), map_location=str(device))
-    except (pickle.UnpicklingError, RuntimeError) as error:
+    except torch.OutOfMemoryError:
+        # メモリ不足は RuntimeError の一種だが、チェックポイントの不良ではないので変換せずにそのまま伝える
+        raise
+    except (pickle.UnpicklingError, EOFError, RuntimeError) as error:
+        # 中身が壊れている（UnpicklingError）、空や途中で切れている（EOFError）、ネットワークの構成が合わない
+        # （RuntimeError）は、いずれもこのチェックポイントを使えない点で同じ扱いにする
         raise CheckpointLoadError(f"チェックポイントを読み込めない: {checkpoint_path}: {error}") from error
     return RslRlGaitPolicy(runner.get_inference_policy(device=str(device)))
