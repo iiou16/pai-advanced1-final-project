@@ -95,11 +95,14 @@ class GaitPolicySpecEnvironment:
 
 
 class RslRlGaitPolicy:
-    """RSL-RL の方策ネットワークを、観測テンソル → 行動テンソルの関数として包む。出力は決定的（分布の平均）。"""
+    """RSL-RL の方策ネットワークを、観測テンソル → 行動テンソルの関数として包む。
+
+    出力は決定的（分布の平均）。パラメータは勾配を計算しない設定にして固定する。
+    """
 
     def __init__(self, policy: torch.nn.Module) -> None:
-        """OnPolicyRunner.get_inference_policy() が返した推論用の方策ネットワークを受け取る。"""
-        self._policy = policy
+        """OnPolicyRunner.get_inference_policy() が返した推論用の方策ネットワークを受け取り、パラメータを固定する。"""
+        self._policy = policy.requires_grad_(False)
 
     def __call__(self, observation: torch.Tensor) -> torch.Tensor:
         """観測 (num_envs, GAIT_OBSERVATION_DIM) から行動 (num_envs, 12) を返す。"""
