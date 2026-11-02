@@ -20,6 +20,7 @@ import torch.nn.functional as functional
 
 from cooperative_go2.entities.planar_frame import wrap_angle_rad
 from cooperative_go2.entities.push_config import RuleBasedPushConfig
+from cooperative_go2.entities.push_success import is_in_goal_region
 
 
 class RuleBasedPushPhase(IntEnum):
@@ -73,7 +74,7 @@ def compute_rule_based_push_commands(
     """
     box_to_goal = inputs.goal_xy_m - inputs.box_xy_m
     goal_distance = torch.linalg.vector_norm(box_to_goal, dim=1)
-    done = goal_distance <= goal_radius_m
+    done = is_in_goal_region(inputs.box_xy_m, inputs.goal_xy_m, goal_radius_m)
     # 停止する環境では押す方向を使わない。箱が目標の中心と重なってもゼロ除算にならないよう 1 で割る
     push_dir = box_to_goal / torch.where(done, torch.ones_like(goal_distance), goal_distance).unsqueeze(1)
     lateral_dir = torch.stack((-push_dir[:, 1], push_dir[:, 0]), dim=1)
