@@ -38,7 +38,10 @@ Windows ドライブ（`/mnt/<drive>/...`、9p/drvfs）はファイル I/O が�
 | quadrants（Genesis の計算バックエンド） | 1.3.3 |
 | rsl-rl-lib | 5.5.2 |
 | tensorboard | 2.21.0 |
+| tensordict | 0.15.4 |
+| pyyaml | 6.0.3 |
 | numpy | 2.5.4 |
+| pytest（開発用、`dev` グループ） | 9.2.0 |
 
 Genesis 公式ソースは pip 版と同じタグ **`v1.4.5`（commit `1b6dfa927f3836d49cf80df7a024116499e68d15`）** を使う。
 `examples/locomotion/go2_train.py` は `rsl-rl-lib>=5.0.0` を要求しており、上記と整合する。
@@ -53,6 +56,8 @@ uv sync
 # Genesis 公式 examples の取得（タグを pip 版に合わせる）
 git clone --depth 1 --branch v1.4.5 https://github.com/Genesis-Embodied-AI/genesis-world.git ~/src/genesis-world
 ```
+
+`uv sync` は開発用の `dev` グループ（pytest）も入れ、本リポジトリの `src/cooperative_go2` を editable で導入する。
 
 `scripts/setup/env.sh` は `LD_LIBRARY_PATH` に `/usr/lib/wsl/lib` を追加する。**Genesis を GPU で動かすシェルでは毎回 source が必要。**
 

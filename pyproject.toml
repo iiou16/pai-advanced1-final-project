@@ -10,10 +10,31 @@ dependencies = [
     "av",
     # Genesis の公式 examples/locomotion はこの版のタグと組で使うため完全一致で固定する
     "genesis-world==1.4.5",
+    # 学習・シーンの設定ファイル（configs/*.yaml）を読み込む
+    "pyyaml",
     "rsl-rl-lib>=5.0.0,<6",
     "tensorboard",
+    # RSL-RL の環境インターフェースが観測を TensorDict で受け渡す
+    "tensordict",
     "torch==2.15.0",
 ]
+
+[project.scripts]
+go2-train-gait = "cooperative_go2.frameworks.train_gait:main"
+go2-evaluate-gait = "cooperative_go2.frameworks.evaluate_gait:main"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cooperative_go2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.uv]
 # uv 管理の Python を落とさず、rclpy と共存できるシステム Python を使う
