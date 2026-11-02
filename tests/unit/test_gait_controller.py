@@ -106,7 +106,11 @@ def test_reset_clears_previous_action_only_for_masked_robots(gait_config: GaitCo
     assert torch.equal(last_actions[1], torch.full((12,), 0.5))
 
 
-@pytest.mark.parametrize("shape", [(NUM_ROBOTS, 2), (NUM_ROBOTS + 1, 3), (3,)])
+@pytest.mark.parametrize(
+    "shape",
+    [(NUM_ROBOTS, 2), (NUM_ROBOTS + 1, 3), (3,)],
+    ids=["wrong-command-dim", "wrong-robot-count", "one-dimensional"],
+)
 def test_command_with_wrong_shape_is_rejected(gait_config: GaitConfig, shape: tuple[int, ...]) -> None:
     controller = GaitController(RecordingPolicy(action_value=0.0), gait_config, NUM_ROBOTS, DEVICE)
 

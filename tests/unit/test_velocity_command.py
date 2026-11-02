@@ -102,7 +102,11 @@ def test_zero_lin_vel_keeps_yaw_rate_for_turning_in_place() -> None:
     assert (sampler.commands[:, 2] != 0.0).all()
 
 
-@pytest.mark.parametrize(("zero_lin_vel_probability", "zero_yaw_rate_probability"), [(0.3, 0.0), (0.0, 0.3)])
+@pytest.mark.parametrize(
+    ("zero_lin_vel_probability", "zero_yaw_rate_probability"),
+    [(0.3, 0.0), (0.0, 0.3)],
+    ids=["zero-lin-vel", "zero-yaw-rate"],
+)
 def test_components_are_zeroed_at_configured_rate(
     zero_lin_vel_probability: float, zero_yaw_rate_probability: float
 ) -> None:
