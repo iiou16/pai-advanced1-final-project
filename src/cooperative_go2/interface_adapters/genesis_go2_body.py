@@ -66,8 +66,9 @@ class GenesisGo2Body:
         self._init_qpos = torch.zeros(GO2_QPOS_SIZE, dtype=gs.tc_float, device=gs.device)
         self._init_qpos[BASE_POS_SLICE] = init_base_pos
         self._init_qpos[BASE_QUAT_SLICE] = init_base_quat
-        for joint, angle in zip(joints, default_angles, strict=True):
-            self._init_qpos[joint.qs_idx_local[0]] = angle
+        # 関節角を GO2_JOINT_NAMES の順に qpos へ書き込むための、各関節の qpos 内の位置
+        self._joint_qs_idx = torch.tensor([joint.qs_idx_local[0] for joint in joints], device=gs.device)
+        self._init_qpos[self._joint_qs_idx] = self.default_dof_pos
 
     def _find_motor_joints(self) -> list[RigidJoint]:
         joints = [self._robot.get_joint(name) for name in GO2_JOINT_NAMES]
@@ -100,6 +101,13 @@ class GenesisGo2Body:
         """PD 制御の目標関節角 (num_envs, 12) [rad] を設定する。次の物理ステップから効く。"""
         self._robot.control_dofs_position(joint_targets, self._motor_dofs_idx)
 
-    def reset(self, mask: torch.Tensor) -> None:
-        """mask (num_envs,) が True の環境の Go2 を初期位置・既定姿勢で静止させる。"""
-        self._robot.set_qpos(self._init_qpos, envs_idx=mask, zero_velocity=True, skip_forward=True)
+    def reset(self, mask: torch.Tensor, dof_pos: torch.Tensor) -> None:
+        """mask (num_envs,) が True の環境の Go2 を初期位置で、関節角を dof_pos にして静止させる。
+
+        Args:
+            mask: リセットする環境のマスク (num_envs,)。
+            dof_pos: リセット後の関節角 (num_envs, 12) [rad]、GO2_JOINT_NAMES の順。mask が False の行は使わない。
+        """
+        qpos = self._init_qpos.expand(dof_pos.shape[0], -1).clone()
+        qpos[:, self._joint_qs_idx] = dof_pos
+        self._robot.set_qpos(qpos, envs_idx=mask, zero_velocity=True, skip_forward=True)

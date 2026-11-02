@@ -17,7 +17,7 @@ from cooperative_go2.entities.gait_observation import GaitObservationInputs, bui
 from cooperative_go2.entities.gait_reward import GaitRewardInputs, GaitRewardTerms, compute_gait_reward_terms
 from cooperative_go2.entities.gait_termination import TerminationReason, classify_terminations, exceeds_tilt_limit
 from cooperative_go2.entities.go2 import NUM_GO2_JOINTS
-from cooperative_go2.entities.go2_state import Go2State
+from cooperative_go2.entities.go2_state import Go2State, sample_reset_dof_pos
 from cooperative_go2.entities.velocity_command import VelocityCommand, VelocityCommandSampler
 from cooperative_go2.interface_adapters.rsl_rl_config import POLICY_OBSERVATION_GROUP
 
@@ -55,8 +55,8 @@ class GaitSimulation(Protocol):
         """直前の物理ステップで物理計算が発散した環境のマスク (num_envs,) を返す。"""
         ...
 
-    def reset(self, mask: torch.Tensor) -> None:
-        """mask (num_envs,) が True の環境を初期位置・既定姿勢で静止させる。"""
+    def reset(self, mask: torch.Tensor, dof_pos: torch.Tensor) -> None:
+        """mask (num_envs,) が True の環境を初期位置で、関節角を dof_pos (num_envs, 12) [rad] にして静止させる。"""
         ...
 
 
@@ -90,30 +90,33 @@ class Go2GaitEnv:
     OnPolicyRunner が episode_length_buf を外から代入して各環境のエピソードの進みをばらす。
     """
 
-    def __init__(self, config: GaitConfig, simulation: GaitSimulation, command_generator: torch.Generator) -> None:
+    def __init__(self, config: GaitConfig, simulation: GaitSimulation, generator: torch.Generator) -> None:
         """全環境を初期姿勢にして、最初の観測を用意する。
 
         Args:
             config: 歩行の設定。simulation はこの設定（env.num_envs を含む）で構築したものであること。
             simulation: 物理を進めるシミュレーションの操作。
-            command_generator: 速度指令を引く乱数生成器。シードを固定して渡す。テンソルはこの生成器のデバイスに置く。
+            generator: 速度指令とリセット時の関節角のノイズを引く乱数生成器。シードを固定して渡す。
+                テンソルはこの生成器のデバイスに置く。
         """
         self.cfg = config
         self.num_envs = config.env.num_envs
         self.num_actions = NUM_GO2_JOINTS
-        self.device = command_generator.device
+        self.device = generator.device
         self.max_episode_length = config.max_episode_length_steps()
         self.episode_length_buf = torch.zeros(self.num_envs, dtype=torch.int64, device=self.device)
         self._simulation = simulation
-        self._commands = VelocityCommandSampler(config.command, self.num_envs, command_generator)
+        self._generator = generator
+        self._commands = VelocityCommandSampler(config.command, self.num_envs, generator)
         self._rewards = EpisodeRewardTracker(self.num_envs, config.env.control_dt_s, self.device)
         self._actions = GaitActionHistory.zeros(self.num_envs, NUM_GO2_JOINTS, self.device)
         self._state = simulation.initial_state
         self.reset()
 
     def fix_command(self, command: VelocityCommand) -> None:
-        """以後に引き直す速度指令を全環境で固定する。次の reset() から反映する（評価用）。"""
+        """全環境の速度指令を直ちに command に切り替え、以後も固定する（評価用）。観測も新しい指令で作り直す。"""
         self._commands.fix(command)
+        self._observation = self._observe()
 
     def get_observations(self) -> TensorDict:
         """現在の観測を RSL-RL の観測グループの形で返す。"""
@@ -183,8 +186,11 @@ class Go2GaitEnv:
         return terms.weighted(self.cfg.reward.scales, self.cfg.env.control_dt_s).zeroed_where(diverged)
 
     def _reset_envs(self, mask: torch.Tensor) -> None:
-        self._simulation.reset(mask)
-        self._state = self._state.reset_where(mask, self._simulation.initial_state)
+        reset_dof_pos = sample_reset_dof_pos(
+            self._simulation.default_dof_pos, self.num_envs, self.cfg.env.reset_joint_pos_noise_rad, self._generator
+        )
+        self._simulation.reset(mask, reset_dof_pos)
+        self._state = self._state.reset_where(mask, self._simulation.initial_state.with_dof_pos(reset_dof_pos))
         self._actions = self._actions.reset_where(mask)
         self._rewards.reset_where(mask)
         self.episode_length_buf = self.episode_length_buf.masked_fill(mask, 0)

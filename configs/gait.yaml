@@ -1,5 +1,7 @@
 # Go2 歩行方策（シーン S0_flat）の学習設定。
-# 値は Genesis 公式の歩行学習の例（v1.4.5 の examples/locomotion）の初期値にそろえている。
+# 値は Genesis 公式の歩行学習の例（v1.4.5 の examples/locomotion）の初期値を基準にしている。
+# 公式の例と異なるのは、停止・旋回・横移動に対応するための項目（速度指令の範囲と 0 にする確率、
+# ヨー角速度の追従の係数、リセット時の関節角のノイズ、学習の反復回数）で、それぞれの箇所に理由を書いている。
 # すべてのキーが必須。読み込み時に過不足・型・値の範囲を検証する。
 
 env:
@@ -18,6 +20,9 @@ env:
   # 平面上の 1 台の歩行では衝突候補が 20 を超えない。超えると学習・評価を止める（終了コード 4）ので、
   # 箱などを足すシーンでは設定し直す
   max_collision_pairs: 20
+  # 全環境が同じ姿勢から始まると評価のシードが結果に効かず、転倒率が 0 か 1 にしかならない。
+  # 関節角を少しばらして、初期状態の違いへの頑健さを学習させ、評価ではシードごとに異なる初期状態を作る
+  reset_joint_pos_noise_rad: 0.1
 
 robot:
   default_joint_angles_rad:
@@ -39,10 +44,15 @@ robot:
   base_init_quat_wxyz: [1.0, 0.0, 0.0, 0.0]
 
 command:
-  # 公式の初期値は前進 0.5 m/s 固定。停止・旋回への拡張は別の設定で行う
-  lin_vel_x_mps: {low: 0.5, high: 0.5}
-  lin_vel_y_mps: {low: 0.0, high: 0.0}
-  yaw_rate_radps: {low: 0.0, high: 0.0}
+  # 公式の初期値（前進 0.5 m/s 固定）を、箱に回り込んで向きを合わせるのに要る範囲まで広げる。
+  # 箱押しの規則ベースの制御が出す指令（前進 0.6 m/s、ヨー 1.0 rad/s まで）を余裕をもって含める
+  lin_vel_x_mps: {low: -0.5, high: 1.0}
+  lin_vel_y_mps: {low: -0.4, high: 0.4}
+  yaw_rate_radps: {low: -1.2, high: 1.2}
+  # 一様に引くだけでは 0 がほぼ出ないため、線速度とヨー角速度を独立にこの確率で 0 にする。
+  # 停止（両方 0）が約 9 %、その場旋回（線速度だけ 0）と直進・横移動（ヨーだけ 0）がそれぞれ約 21 % になる
+  zero_lin_vel_probability: 0.3
+  zero_yaw_rate_probability: 0.3
   resampling_time_s: 4.0
 
 observation:
@@ -56,7 +66,8 @@ reward:
   base_height_target_m: 0.3
   scales:
     tracking_lin_vel: 1.0
-    tracking_ang_vel: 0.2
+    # 公式の値 0.2 は前進だけを学習するときの値。旋回の指令に追従させるため重みを上げる
+    tracking_ang_vel: 0.5
     lin_vel_z: -1.0
     base_height: -50.0
     action_rate: -0.005
@@ -86,4 +97,5 @@ rsl_rl:
 training:
   # 学習用のシード。評価には別のシードを使う
   seed: 1
-  max_iterations: 101
+  # 公式の例の 101 反復は前進だけを学習する場合の値。指令の範囲を広げたため反復を増やす
+  max_iterations: 1501

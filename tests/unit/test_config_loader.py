@@ -132,8 +132,14 @@ def test_invalid_rsl_rl_value_is_rejected(gait_config_data: dict, key: str, valu
         ("command", "yaw_rate_radps", {"low": 1.0, "high": -1.0}),
         ("command", "resampling_time_s", 4.01),
         ("robot", "base_init_pos_m", [0.0, 0.42]),
+        ("command", "zero_lin_vel_probability", 1.5),
+        ("command", "zero_yaw_rate_probability", -0.1),
+        ("env", "reset_joint_pos_noise_rad", -0.1),
     ],
-    ids=["range-low-above-high", "resampling-not-multiple-of-dt", "position-with-two-elements"],
+    ids=[
+        "range-low-above-high", "resampling-not-multiple-of-dt", "position-with-two-elements",
+        "probability-above-one", "negative-probability", "negative-reset-noise",
+    ],  # fmt: skip
 )
 def test_inconsistent_gait_value_is_rejected(gait_config_data: dict, section: str, key: str, value: object) -> None:
     gait_config_data[section][key] = value

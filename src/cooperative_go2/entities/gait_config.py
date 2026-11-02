@@ -38,6 +38,12 @@ def _require_non_negative(name: str, value: float) -> None:
         raise InvalidGaitConfigError(f"{name} は 0 以上が必要: {value}")
 
 
+def _require_probability(name: str, value: float) -> None:
+    _require_finite(name, value)
+    if not 0.0 <= value <= 1.0:
+        raise InvalidGaitConfigError(f"{name} は 0 以上 1 以下が必要: {value}")
+
+
 @dataclass(frozen=True)
 class ValueRange:
     """一様分布で値を引く閉区間 [low, high]。low == high なら固定値を表す。"""
@@ -56,19 +62,28 @@ class ValueRange:
 class VelocityCommandConfig:
     """学習中に引く速度指令の範囲と、引き直す周期。
 
+    範囲から一様に引くだけでは厳密な 0 がほぼ出ず、停止やその場旋回を学習できない。そのため線速度 (vx, vy) と
+    ヨー角速度を、それぞれ独立に指定の確率で 0 にする。両方が 0 になれば停止、線速度だけが 0 ならその場旋回になる。
+
     Attributes:
         lin_vel_x_mps: 本体座標系の前後方向の速度 [m/s]。前が正。
         lin_vel_y_mps: 本体座標系の左右方向の速度 [m/s]。左が正。
         yaw_rate_radps: ヨー角速度 [rad/s]。上から見て反時計回りが正。
+        zero_lin_vel_probability: 引いた指令の vx と vy をともに 0 にする確率。0 以上 1 以下。
+        zero_yaw_rate_probability: 引いた指令のヨー角速度を 0 にする確率。0 以上 1 以下。
         resampling_time_s: 指令を引き直す周期 [s]。正の値。
     """
 
     lin_vel_x_mps: ValueRange
     lin_vel_y_mps: ValueRange
     yaw_rate_radps: ValueRange
+    zero_lin_vel_probability: float
+    zero_yaw_rate_probability: float
     resampling_time_s: float
 
     def __post_init__(self) -> None:
+        _require_probability("command.zero_lin_vel_probability", self.zero_lin_vel_probability)
+        _require_probability("command.zero_yaw_rate_probability", self.zero_yaw_rate_probability)
         _require_positive("command.resampling_time_s", self.resampling_time_s)
 
 
@@ -114,6 +129,8 @@ class GaitEnvConfig:
         termination_roll_deg: ロールの絶対値がこれを超えたら転倒としてエピソードを終える [deg]。
         termination_pitch_deg: ピッチの絶対値がこれを超えたら転倒としてエピソードを終える [deg]。
         max_collision_pairs: 物理エンジンが扱う衝突候補の上限。超えたら設定の不備として学習・評価を止める。
+        reset_joint_pos_noise_rad: リセット時に既定姿勢の各関節角へ足す一様ノイズの幅 [rad]。
+            [-幅, 幅] から関節ごとに独立に引く。0 以上。0 なら全環境が同じ初期状態から始まる。
     """
 
     num_envs: int
@@ -126,6 +143,7 @@ class GaitEnvConfig:
     termination_roll_deg: float
     termination_pitch_deg: float
     max_collision_pairs: int
+    reset_joint_pos_noise_rad: float
 
     def __post_init__(self) -> None:
         _require_positive("env.num_envs", self.num_envs)
@@ -137,6 +155,7 @@ class GaitEnvConfig:
         _require_positive("env.termination_roll_deg", self.termination_roll_deg)
         _require_positive("env.termination_pitch_deg", self.termination_pitch_deg)
         _require_positive("env.max_collision_pairs", self.max_collision_pairs)
+        _require_non_negative("env.reset_joint_pos_noise_rad", self.reset_joint_pos_noise_rad)
 
 
 @dataclass(frozen=True)

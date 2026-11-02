@@ -1,6 +1,6 @@
 """Go2 の 1 制御周期分の状態。テンソルは並列環境のバッチ (num_envs, ...)、関節は GO2_JOINT_NAMES の順。"""
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 
 import torch
 
@@ -52,6 +52,10 @@ class Go2State:
     base_euler_deg: torch.Tensor
     base_lin_vel: torch.Tensor
 
+    def with_dof_pos(self, dof_pos: torch.Tensor) -> "Go2State":
+        """関節角だけを dof_pos (num_envs, 12) [rad] に置き換えた新しい状態を返す。"""
+        return replace(self, proprioception=replace(self.proprioception, dof_pos=dof_pos))
+
     def reset_where(self, mask: torch.Tensor, initial: "Go2State") -> "Go2State":
         """mask (num_envs,) が True の環境の行だけを initial の値に置き換えた新しい状態を返す。元の状態は変えない。"""
         return Go2State(
@@ -88,3 +92,19 @@ def initial_go2_state(
         base_euler_deg=zero_row_like(base_pos_m),
         base_lin_vel=zero_row_like(base_pos_m),
     )
+
+
+def sample_reset_dof_pos(
+    default_dof_pos: torch.Tensor, num_envs: int, noise_rad: float, generator: torch.Generator
+) -> torch.Tensor:
+    """リセット時の関節角 (num_envs, 12) [rad] を、既定姿勢に一様ノイズを足して引く。
+
+    Args:
+        default_dof_pos: 既定姿勢の関節角 (12,) [rad]。
+        num_envs: 並列環境の数。
+        noise_rad: ノイズの幅 [rad]。関節ごとに独立に [-noise_rad, noise_rad] から引く。0 なら既定姿勢そのもの。
+        generator: ノイズを引く乱数生成器。テンソルはこの生成器のデバイスに置く。
+    """
+    shape = (num_envs, default_dof_pos.shape[0])
+    uniform = torch.rand(shape, generator=generator, device=generator.device)
+    return default_dof_pos + (2.0 * uniform - 1.0) * noise_rad
