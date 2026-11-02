@@ -6,6 +6,8 @@ readme = "README.md"
 # ROS 2 Jazzy の rclpy が apt のシステム Python 3.12 向けにビルドされるため、同じ版に揃える
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    # 録画した評価動画を読み戻して検証する
+    "av",
     # Genesis の公式 examples/locomotion はこの版のタグと組で使うため完全一致で固定する
     "genesis-world==1.4.5",
     "rsl-rl-lib>=5.0.0,<6",
