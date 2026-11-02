@@ -58,7 +58,7 @@ def test_plan_converts_durations_to_steps_and_overrides_env_count(training_confi
 
     segments = plan.scenarios[0].segments
     assert [segment.num_steps for segment in segments] == [500, 200]
-    assert [segment.settle_steps for segment in segments] == [50, 50]
+    assert plan.settle_steps == 50
     assert plan.config.env.num_envs == 3
     assert plan.config.reward == training_config.reward
 
@@ -77,10 +77,16 @@ def test_plan_accepts_scenario_equal_to_episode_length(training_config: GaitConf
         {"seed": TRAINING_SEED},
         {"num_envs": 0},
         {"suite": _suite(_scenario("long", (STOP, 15.0), (TURN_IN_PLACE, 5.02)))},
+        # 秒の合計は 19.98 s でエピソード以内だが、1.11 s を 56 ステップに丸めるので合計 1008 ステップになる
+        {"suite": _suite(_scenario("rounded", *[(STOP, 1.11)] * 18))},
         # 0.01 s は制御周期 0.02 s に丸めると 0 ステップになり、過渡（0 ステップ）以下になる
         {"suite": _suite(_scenario("short", (STOP, 0.01)), settle_time_s=0.0)},
+        {"suite": _suite(_scenario("fast", (VelocityCommand(vx_mps=5.0, vy_mps=0.0, yaw_rate_radps=0.0), 1.0)))},
     ],
-    ids=["seed-reused", "zero-envs", "longer-than-episode", "rounds-to-zero-steps"],
+    ids=[
+        "seed-reused", "zero-envs", "longer-than-episode", "longer-after-rounding", "rounds-to-zero-steps",
+        "outside-training-range",
+    ],  # fmt: skip
 )
 def test_plan_rejects_invalid_request(training_config: GaitConfig, request_overrides: dict[str, object]) -> None:
     with pytest.raises(InvalidEvaluationRequestError):
@@ -167,7 +173,8 @@ def test_evaluator_summarizes_tracking_after_settle_time(training_config: GaitCo
 
     (segment,) = summary.segments
     assert environment.events == [("reset", TURN_IN_PLACE)]
-    assert segment.num_tracking_steps == 2
+    # 3 ステップのうち 1 ステップ目は過渡。環境 0 は 2 ステップ目に転倒し、その後 1 ステップは立ち直りの過渡
+    assert segment.num_tracking_samples == 2
     assert segment.mean_yaw_rate_error_radps == pytest.approx(0.5)
     assert segment.fall_rate == pytest.approx(0.5)
     assert summary.fall_rate == pytest.approx(0.5)
@@ -180,7 +187,7 @@ def test_falls_during_settle_time_are_counted(training_config: GaitConfig) -> No
 
     (summary,) = GaitEvaluator(FakeRolloutEnvironment(num_envs=2), EchoPolicy(), recorder_factory=None).run(plan)
 
-    assert summary.segments[0].num_tracking_steps == 1
+    assert summary.segments[0].num_tracking_samples == 1
     assert summary.segments[0].num_falls == 1
 
 

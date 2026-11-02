@@ -22,7 +22,7 @@ def _segment(command: VelocityCommand, fall_rate: float) -> SegmentTrackingSumma
         command=command,
         duration_s=4.0,
         num_envs=2,
-        num_tracking_steps=150,
+        num_tracking_samples=300,
         mean_lin_vel_error_mps=0.1,
         mean_yaw_rate_error_radps=0.2,
         num_falls=1,

@@ -94,10 +94,15 @@ def _run_in_simulation(
 def _log_summaries(summaries: tuple[ScenarioSummary, ...]) -> None:
     for summary in summaries:
         errors = ", ".join(
-            f"{segment.mean_lin_vel_error_mps:.3f} m/s / {segment.mean_yaw_rate_error_radps:.3f} rad/s"
+            f"{_format_error(segment.mean_lin_vel_error_mps)} m/s / {_format_error(segment.mean_yaw_rate_error_radps)} rad/s"
             for segment in summary.segments
         )
         logger.info("%s: 転倒率 %.3f、区間ごとの追従誤差（線速度 / ヨー）[%s]", summary.name, summary.fall_rate, errors)
+
+
+def _format_error(mean_error: float | None) -> str:
+    # None は全環境が転倒し続けて追従誤差を集計できなかった区間
+    return "集計なし" if mean_error is None else f"{mean_error:.3f}"
 
 
 def _left_output_hint(output_dir: Path) -> str:
@@ -153,8 +158,9 @@ def main(argv: list[str] | None = None) -> None:
         settle_time_s=suite.settle_time_s,
         scenarios=summaries,
     )
-    store.save(record)
+    # 保存に失敗しても、長い評価の結果をログには残す
     _log_summaries(summaries)
+    store.save(record)
     logger.info("評価結果を保存した: %s", output_dir)
 
 

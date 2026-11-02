@@ -6,12 +6,17 @@ from cooperative_go2.entities.gait_evaluation import (
     GaitEvaluationScenario,
     GaitEvaluationSuite,
     InvalidEvaluationScenarioError,
+    FallRecoveryExclusion,
     SegmentTrackingAccumulator,
 )
 from cooperative_go2.entities.velocity_command import VelocityCommand
 
 FORWARD = VelocityCommand(vx_mps=0.5, vy_mps=0.0, yaw_rate_radps=0.0)
 FORWARD_SEGMENT = CommandSegment(command=FORWARD, duration_s=2.0)
+
+
+def _all(num_envs: int) -> torch.Tensor:
+    return torch.ones(num_envs, dtype=torch.bool)
 
 
 def test_tracking_errors_are_averaged_over_envs_and_steps() -> None:
@@ -21,18 +26,34 @@ def test_tracking_errors_are_averaged_over_envs_and_steps() -> None:
     accumulator.add_tracking(
         base_lin_vel=torch.tensor([[0.5, 0.0, 0.0], [0.0, 0.0, 0.0]]),
         base_ang_vel=torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 0.2]]),
+        included=_all(2),
     )
     summary = accumulator.summarize()
 
     assert summary.mean_lin_vel_error_mps == pytest.approx(0.25)
     assert summary.mean_yaw_rate_error_radps == pytest.approx(0.1)
-    assert summary.num_tracking_steps == 1
+    assert summary.num_tracking_samples == 2
     assert summary.duration_s == pytest.approx(2.0)
+
+
+def test_excluded_envs_do_not_count_toward_tracking_error() -> None:
+    accumulator = SegmentTrackingAccumulator(FORWARD_SEGMENT, num_envs=2, device="cpu")
+
+    # 環境 1 は 0.5 m/s 遅れているが、集計から外す
+    accumulator.add_tracking(
+        base_lin_vel=torch.tensor([[0.5, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+        base_ang_vel=torch.zeros(2, 3),
+        included=torch.tensor([True, False]),
+    )
+    summary = accumulator.summarize()
+
+    assert summary.mean_lin_vel_error_mps == pytest.approx(0.0)
+    assert summary.num_tracking_samples == 1
 
 
 def test_fall_rate_counts_envs_that_fell_at_least_once() -> None:
     accumulator = SegmentTrackingAccumulator(FORWARD_SEGMENT, num_envs=4, device="cpu")
-    accumulator.add_tracking(torch.zeros(4, 3), torch.zeros(4, 3))
+    accumulator.add_tracking(torch.zeros(4, 3), torch.zeros(4, 3), _all(4))
 
     accumulator.add_falls(torch.tensor([True, False, False, False]))
     accumulator.add_falls(torch.tensor([True, True, False, False]))
@@ -42,12 +63,44 @@ def test_fall_rate_counts_envs_that_fell_at_least_once() -> None:
     assert summary.fall_rate == pytest.approx(0.5)
 
 
-def test_summarize_without_tracking_steps_raises() -> None:
+def test_tracking_error_is_none_without_samples() -> None:
     accumulator = SegmentTrackingAccumulator(FORWARD_SEGMENT, num_envs=1, device="cpu")
-    accumulator.add_falls(torch.tensor([False]))
+    accumulator.add_tracking(torch.zeros(1, 3), torch.zeros(1, 3), included=torch.tensor([False]))
 
-    with pytest.raises(ValueError):
-        accumulator.summarize()
+    summary = accumulator.summarize()
+
+    assert summary.num_tracking_samples == 0
+    assert summary.mean_lin_vel_error_mps is None
+    assert summary.mean_yaw_rate_error_radps is None
+
+
+def test_fallen_env_is_excluded_for_fall_step_and_recovery_steps() -> None:
+    exclusion = FallRecoveryExclusion(num_envs=2, exclusion_steps=2, device="cpu")
+    no_fall = torch.tensor([False, False])
+
+    included_per_step = [
+        exclusion.advance(torch.tensor([True, False])),
+        exclusion.advance(no_fall),
+        exclusion.advance(no_fall),
+        exclusion.advance(no_fall),
+    ]
+
+    assert [mask.tolist() for mask in included_per_step] == [
+        [False, True],
+        [False, True],
+        [False, True],
+        [True, True],
+    ]
+
+
+def test_falling_again_restarts_recovery() -> None:
+    exclusion = FallRecoveryExclusion(num_envs=1, exclusion_steps=1, device="cpu")
+
+    exclusion.advance(torch.tensor([True]))
+    exclusion.advance(torch.tensor([True]))
+    included = exclusion.advance(torch.tensor([False]))
+
+    assert included.tolist() == [False]
 
 
 @pytest.mark.parametrize(

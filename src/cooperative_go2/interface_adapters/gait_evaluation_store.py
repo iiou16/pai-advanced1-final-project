@@ -15,7 +15,7 @@ SEGMENTS_FILENAME = "segments.csv"
 SCENARIOS_COPY_FILENAME = "gait_eval.yaml"
 SEGMENT_CSV_COLUMNS = (
     "scenario", "segment_index", "vx_mps", "vy_mps", "yaw_rate_radps", "duration_s", "num_envs",
-    "num_tracking_steps", "mean_lin_vel_error_mps", "mean_yaw_rate_error_radps", "num_falls", "fall_rate",
+    "num_tracking_samples", "mean_lin_vel_error_mps", "mean_yaw_rate_error_radps", "num_falls", "fall_rate",
     "scenario_fall_rate",
 )  # fmt: skip
 
@@ -96,7 +96,7 @@ def _segment_rows(scenarios: tuple[ScenarioSummary, ...]) -> list[list[object]]:
     return [
         [
             scenario.name, index, *segment.command.as_tuple(), segment.duration_s, segment.num_envs,
-            segment.num_tracking_steps, segment.mean_lin_vel_error_mps, segment.mean_yaw_rate_error_radps,
+            segment.num_tracking_samples, segment.mean_lin_vel_error_mps, segment.mean_yaw_rate_error_radps,
             segment.num_falls, segment.fall_rate, scenario.fall_rate,
         ]  # fmt: skip
         for scenario in scenarios

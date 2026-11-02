@@ -96,9 +96,12 @@ class SegmentTrackingSummary:
         command: 区間中に与えた速度指令。
         duration_s: 区間の長さ [s]。
         num_envs: 並列に走らせた環境の数。
-        num_tracking_steps: 追従誤差を集計した制御ステップ数（区間の始めの過渡を除いた数）。
-        mean_lin_vel_error_mps: 水平速度 (vx, vy) の指令との差のノルムの、全環境・集計ステップでの平均 [m/s]。
-        mean_yaw_rate_error_radps: ヨー角速度の指令との差の絶対値の、全環境・集計ステップでの平均 [rad/s]。
+        num_tracking_samples: 追従誤差を集計した「環境 × 制御ステップ」の数。区間の始めの過渡と、転倒した環境の
+            立ち直りの過渡を除いた数。
+        mean_lin_vel_error_mps: 水平速度 (vx, vy) の指令との差のノルムの、集計したサンプルでの平均 [m/s]。
+            集計したサンプルが無い（全環境が転倒し続けた）場合は None。
+        mean_yaw_rate_error_radps: ヨー角速度の指令との差の絶対値の、集計したサンプルでの平均 [rad/s]。
+            集計したサンプルが無い場合は None。
         num_falls: 区間中に全環境で転倒した回数の合計。転倒した環境は初期姿勢に戻って続けるため、1 環境で複数回数えうる。
         fall_rate: 区間中に 1 回以上転倒した環境の割合（0〜1）。
     """
@@ -106,9 +109,9 @@ class SegmentTrackingSummary:
     command: VelocityCommand
     duration_s: float
     num_envs: int
-    num_tracking_steps: int
-    mean_lin_vel_error_mps: float
-    mean_yaw_rate_error_radps: float
+    num_tracking_samples: int
+    mean_lin_vel_error_mps: float | None
+    mean_yaw_rate_error_radps: float | None
     num_falls: int
     fall_rate: float
 
@@ -128,6 +131,30 @@ class ScenarioSummary:
     fall_rate: float
 
 
+class FallRecoveryExclusion:
+    """転倒してリセットされた環境を、立ち直るまでの間だけ追従誤差の集計から外す。
+
+    転倒したステップのリセット前の速度と、初期姿勢から立ち直る間の速度は、指令への追従の良し悪しではなく
+    転倒の結果を表す。これを追従誤差に混ぜないため、転倒したステップとその後の exclusion_steps ステップを除く。
+    """
+
+    def __init__(self, num_envs: int, exclusion_steps: int, device: torch.device | str) -> None:
+        """どの環境も除外していない状態で始める。exclusion_steps は転倒後に除くステップ数（0 以上）。"""
+        self._exclusion_steps = exclusion_steps
+        self._remaining = torch.zeros(num_envs, dtype=torch.int64, device=device)
+
+    def advance(self, fallen: torch.Tensor) -> torch.Tensor:
+        """1 制御ステップ進め、このステップを追従誤差に含めてよい環境のマスク (num_envs,) を返す。
+
+        Args:
+            fallen: このステップで転倒した環境を True とするマスク (num_envs,)。
+        """
+        self._remaining = torch.where(fallen, self._exclusion_steps + 1, self._remaining)
+        included = self._remaining == 0
+        self._remaining = torch.clamp(self._remaining - 1, min=0)
+        return included
+
+
 class SegmentTrackingAccumulator:
     """1 つの区間について、制御ステップごとの速度と転倒を積算し、SegmentTrackingSummary にまとめる。"""
 
@@ -138,40 +165,44 @@ class SegmentTrackingAccumulator:
         self._command_xy = torch.tensor([command.vx_mps, command.vy_mps], device=device)
         self._lin_vel_error_sum = torch.zeros((), device=device)
         self._yaw_rate_error_sum = torch.zeros((), device=device)
+        self._num_samples = torch.zeros((), dtype=torch.int64, device=device)
         self._falls_per_env = torch.zeros(num_envs, dtype=torch.int64, device=device)
-        self._num_tracking_steps = 0
 
-    def add_tracking(self, base_lin_vel: torch.Tensor, base_ang_vel: torch.Tensor) -> None:
-        """1 制御ステップ分の速度を、追従誤差として積算する。
+    def add_tracking(self, base_lin_vel: torch.Tensor, base_ang_vel: torch.Tensor, included: torch.Tensor) -> None:
+        """1 制御ステップ分の速度を、included の環境についてだけ追従誤差として積算する。
 
         Args:
             base_lin_vel: 胴体の線速度 (num_envs, 3)、本体座標系 [m/s]。
             base_ang_vel: 胴体の角速度 (num_envs, 3)、本体座標系 [rad/s]。
+            included: 集計に含める環境を True とするマスク (num_envs,)。
         """
-        self._lin_vel_error_sum += torch.linalg.vector_norm(base_lin_vel[:, :2] - self._command_xy, dim=1).sum()
-        self._yaw_rate_error_sum += torch.abs(base_ang_vel[:, 2] - self._segment.command.yaw_rate_radps).sum()
-        self._num_tracking_steps += 1
+        lin_vel_error = torch.linalg.vector_norm(base_lin_vel[:, :2] - self._command_xy, dim=1)
+        yaw_rate_error = torch.abs(base_ang_vel[:, 2] - self._segment.command.yaw_rate_radps)
+        self._lin_vel_error_sum += torch.where(included, lin_vel_error, 0.0).sum()
+        self._yaw_rate_error_sum += torch.where(included, yaw_rate_error, 0.0).sum()
+        self._num_samples += included.sum()
 
     def add_falls(self, fallen: torch.Tensor) -> None:
         """1 制御ステップ分の転倒を積算する。fallen はこのステップで転倒した環境を True とするマスク (num_envs,)。"""
         self._falls_per_env += fallen.to(torch.int64)
 
     def summarize(self) -> SegmentTrackingSummary:
-        """積算した値を集計する。
-
-        Raises:
-            ValueError: 追従誤差を 1 ステップも積算していない。
-        """
-        if self._num_tracking_steps == 0:
-            raise ValueError("集計するステップが無い。add_tracking を 1 回以上呼ぶ必要がある")
-        num_samples = self._num_tracking_steps * self._num_envs
+        """積算した値を集計する。集計したサンプルが無ければ、追従誤差の平均は None にする。"""
+        num_samples = int(self._num_samples)
         return SegmentTrackingSummary(
             command=self._segment.command,
             duration_s=self._segment.duration_s,
             num_envs=self._num_envs,
-            num_tracking_steps=self._num_tracking_steps,
-            mean_lin_vel_error_mps=float(self._lin_vel_error_sum) / num_samples,
-            mean_yaw_rate_error_radps=float(self._yaw_rate_error_sum) / num_samples,
+            num_tracking_samples=num_samples,
+            mean_lin_vel_error_mps=_mean_or_none(self._lin_vel_error_sum, num_samples),
+            mean_yaw_rate_error_radps=_mean_or_none(self._yaw_rate_error_sum, num_samples),
             num_falls=int(self._falls_per_env.sum()),
             fall_rate=float((self._falls_per_env > 0).sum()) / self._num_envs,
         )
+
+
+def _mean_or_none(total: torch.Tensor, count: int) -> float | None:
+    # 全環境が転倒し続けた区間では追従誤差を定義できない。0 などで埋めると良い追従と区別できなくなる
+    if count == 0:
+        return None
+    return float(total) / count
