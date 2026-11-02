@@ -5,6 +5,7 @@ CUDA が使えない場合は CPU に切り替えず、Genesis の初期化で�
 失敗時は例外を送出して非ゼロ終了する。
 """
 
+import math
 import time
 
 import genesis as gs
@@ -49,7 +50,12 @@ def main() -> None:
     expected_height_m = BOX_SIZE_M / 2
     print(f"backend={gs.backend.name} steps={SIM_STEPS} wall_time_s={wall_time_s:.3f}")
     print(f"box z: final={final_height_m:.4f} expected={expected_height_m:.4f}")
-    if abs(final_height_m - expected_height_m) > REST_HEIGHT_TOLERANCE_M:
+    # 発散して NaN になると差の比較が常に偽になるため、有限値であることを先に確かめる
+    is_at_rest = (
+        math.isfinite(final_height_m)
+        and abs(final_height_m - expected_height_m) <= REST_HEIGHT_TOLERANCE_M
+    )
+    if not is_at_rest:
         raise RigidSmokeError(
             f"箱が床に静止していない: z={final_height_m:.4f} m (期待 {expected_height_m:.4f} m)"
         )
