@@ -17,13 +17,13 @@ def test_training_with_missing_config_exits_with_invalid_config(tmp_path: Path) 
 
 
 def test_evaluation_with_training_seed_exits_with_invalid_input(
-    tmp_path: Path, gait_config_path: Path, gait_config_data: dict
+    tmp_path: Path, gait_config_path: Path, gait_config_data: dict, gait_eval_config_path: Path
 ) -> None:
     shutil.copyfile(gait_config_path, tmp_path / "gait.yaml")
     training_seed = str(gait_config_data["training"]["seed"])
     arguments = [
-        "--run-dir", str(tmp_path), "--checkpoint", "100", "--vx", "0.5", "--vy", "0.0", "--yaw-rate", "0.0",
-        "--num-envs", "1", "--duration-s", "1.0", "--seed", training_seed,
+        "--run-dir", str(tmp_path), "--checkpoint", "100", "--scenarios", str(gait_eval_config_path),
+        "--num-envs", "1", "--seed", training_seed,
     ]  # fmt: skip
 
     with pytest.raises(SystemExit) as exc_info:
@@ -56,11 +56,13 @@ def test_training_into_existing_run_dir_exits_without_touching_it(
     assert previous_checkpoint.read_bytes() == b"previous"
 
 
-def test_evaluation_with_nan_duration_exits_with_invalid_input(tmp_path: Path, gait_config_path: Path) -> None:
+def test_evaluation_with_invalid_scenarios_exits_with_invalid_input(tmp_path: Path, gait_config_path: Path) -> None:
     shutil.copyfile(gait_config_path, tmp_path / "gait.yaml")
+    scenarios = tmp_path / "scenarios.yaml"
+    scenarios.write_text("settle_time_s: .nan\nscenarios: []\n", encoding="utf-8")
     arguments = [
-        "--run-dir", str(tmp_path), "--checkpoint", "100", "--vx", "0.5", "--vy", "0.0", "--yaw-rate", "0.0",
-        "--num-envs", "1", "--duration-s", "nan", "--seed", "1001",
+        "--run-dir", str(tmp_path), "--checkpoint", "100", "--scenarios", str(scenarios),
+        "--num-envs", "1", "--seed", "1001",
     ]  # fmt: skip
 
     with pytest.raises(SystemExit) as exc_info:

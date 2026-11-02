@@ -14,7 +14,7 @@ class Go2GaitRolloutEnvironment:
     """速度指令を固定して歩行方策を走らせる。学習と違い、物理計算が 1 環境でも発散したら止める。"""
 
     def __init__(self, env: Go2GaitEnv) -> None:
-        """評価に使う環境を受け取る。速度指令は reset_with_command() で固定する。"""
+        """評価に使う環境を受け取る。速度指令は reset_with_command() と switch_command() で与える。"""
         self._env = env
 
     @property
@@ -28,9 +28,14 @@ class Go2GaitRolloutEnvironment:
         return self._env.device
 
     def reset_with_command(self, command: VelocityCommand) -> torch.Tensor:
-        """全環境を初期姿勢に戻し、以後の速度指令を固定する。初期観測を返す。"""
+        """全環境を初期姿勢に戻し、速度指令を command に固定する。初期観測を返す。"""
         self._env.fix_command(command)
         return self._env.reset()[POLICY_OBSERVATION_GROUP]
+
+    def switch_command(self, command: VelocityCommand) -> torch.Tensor:
+        """リセットせずに、全環境の速度指令を直ちに command に切り替える。新しい指令を含む観測を返す。"""
+        self._env.fix_command(command)
+        return self._env.get_observations()[POLICY_OBSERVATION_GROUP]
 
     def step(self, actions: torch.Tensor) -> GaitRolloutStep:
         """行動を適用して 1 制御ステップ進める。

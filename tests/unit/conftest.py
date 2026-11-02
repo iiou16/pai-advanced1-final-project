@@ -10,6 +10,7 @@ from cooperative_go2.interface_adapters.config_loader import GaitSettings, parse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GAIT_CONFIG_PATH = REPO_ROOT / "configs" / "gait.yaml"
+GAIT_EVAL_CONFIG_PATH = REPO_ROOT / "configs" / "gait_eval.yaml"
 
 Go2StateFactory = Callable[..., Go2State]
 
@@ -18,6 +19,12 @@ Go2StateFactory = Callable[..., Go2State]
 def gait_config_path() -> Path:
     """リポジトリの configs/gait.yaml。値の検査には使わず、読み込めることの確認だけに使う。"""
     return GAIT_CONFIG_PATH
+
+
+@pytest.fixture
+def gait_eval_config_path() -> Path:
+    """リポジトリの configs/gait_eval.yaml（評価シナリオ）。"""
+    return GAIT_EVAL_CONFIG_PATH
 
 
 @pytest.fixture
