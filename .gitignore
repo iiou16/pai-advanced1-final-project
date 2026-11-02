@@ -44,11 +44,10 @@ outputs/
 MUJOCO_LOG.TXT
 *.log
 
-# --- 強化学習の実行ログ（Genesis/RSL-RL は logs/<exp>/ に設定 pickle と TensorBoard を出力する） ---
-logs/
-runs/
-*.pkl
-*.npz
+# --- 強化学習の実行ログ（Genesis/RSL-RL はリポジトリのルートで実行すると logs/<exp>/ に設定 pickle と TensorBoard を出力する） ---
+# src/ 配下の同名パッケージやアセットの *.pkl / *.npz を巻き込まないよう、ルート直下のディレクトリに限定する
+/logs/
+/runs/
 events.out.tfevents.*
 
 # --- ROS 2 のビルド成果物と rosbag2 の生データ ---
