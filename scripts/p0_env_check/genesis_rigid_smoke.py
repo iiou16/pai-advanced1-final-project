@@ -7,8 +7,10 @@ CUDA が使えない場合は CPU に切り替えず、Genesis の初期化で�
 
 import math
 import time
+from typing import NamedTuple
 
 import genesis as gs
+from genesis.engine.entities import RigidEntity
 
 SIM_DT_S = 0.01
 SIM_STEPS = 200  # 2 秒。1 m 落下と接触後の減衰に十分な長さ
@@ -22,8 +24,15 @@ class RigidSmokeError(RuntimeError):
     """剛体シーンが物理的に妥当な状態に収束しなかったことを表す。"""
 
 
-def build_scene() -> tuple[gs.Scene, object]:
-    """平面と落下させる箱からなるシーンを構築して返す。"""
+class FallingBoxScene(NamedTuple):
+    """構築済みのシーンと、高さを検証する対象の箱。"""
+
+    scene: gs.Scene
+    box: RigidEntity
+
+
+def build_scene() -> FallingBoxScene:
+    """平面と落下させる箱からなる、step 可能な構築済みシーンを返す。"""
     scene = gs.Scene(
         sim_options=gs.options.SimOptions(dt=SIM_DT_S),
         show_viewer=False,
@@ -33,7 +42,7 @@ def build_scene() -> tuple[gs.Scene, object]:
         gs.morphs.Box(size=(BOX_SIZE_M,) * 3, pos=(0.0, 0.0, BOX_DROP_HEIGHT_M)),
     )
     scene.build()
-    return scene, box
+    return FallingBoxScene(scene=scene, box=box)
 
 
 def main() -> None:
