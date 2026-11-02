@@ -63,7 +63,7 @@ git clone --depth 1 --branch v1.4.5 https://github.com/Genesis-Embodied-AI/genes
 - 導入: `bash scripts/setup/install_ros2_jazzy.sh`（sudo が必要。ros2_documentation の Jazzy / Ubuntu deb 手順に準拠。`ros-jazzy-desktop` と `ros-dev-tools` を入れる）。
 - 前提: ロケールが UTF-8 であること、apt の Suites に `noble-updates` と `noble-backports` が設定されていること。
 - 公式手順にある「導入前の `apt upgrade`」はスクリプトに含めていない。`apt install ros-jazzy-desktop` が依存関係の衝突で失敗した場合は、まず `sudo apt update && sudo apt upgrade` を実行する。
-- 学習用 venv の NumPy は 2.x だが、apt 版の msg 型はシステムの NumPy 1.26 向けにビルドされている。venv から msg 型を変換して NumPy の ABI 不一致で失敗する場合は、`pyproject.toml` に `numpy<2` を追加して対処する（`numpy==1.26.4` に解決でき、opencv-python は 4.11.0.86 まで下がる）。
+- 学習用 venv の NumPy は 2.x、apt 版の msg 型はシステムの NumPy 1.26 向けにビルドされている。上記の版の組み合わせでは、venv から固定長配列を含む msg 型を変換できることを `scripts/p0_env_check/ros2_smoke.sh` で確認している。版を更新して NumPy の ABI 不一致で失敗するようになった場合は、`pyproject.toml` に `numpy<2` を追加する。
 
 | パッケージ | バージョン |
 |---|---|
@@ -73,14 +73,15 @@ git clone --depth 1 --branch v1.4.5 https://github.com/Genesis-Embodied-AI/genes
 
 ## 5. 動作確認
 
-セットアップ後、`scripts/p0_env_check/` のスクリプトで環境を確認する（`p0` は開発の最初の段階＝Phase 0 を表し、学習や ROS 2 連携の実装に入る前に行う確認であることを示す）。
-いずれもリポジトリのルートで実行し、最後に `RESULT: PASS` を出力する。失敗時は非ゼロで終了する。
+セットアップ後、`scripts/p0_env_check/` のスクリプトで環境を確認する（`p0` は、学習や ROS 2 連携の実装に入る前の最初の段階に行う確認であることを示す）。
+いずれもリポジトリのルートで実行し、検証に通れば最後に `RESULT: PASS` を出力する。失敗時は非ゼロで終了する。
+Viewer の確認だけは、ウィンドウを生成して描画できたことまでを判定する。表示内容は目視で確かめる。
 
 | 確認内容 | コマンド |
 |---|---|
 | PyTorch の CUDA 演算 | `uv run --frozen python scripts/p0_env_check/torch_cuda_smoke.py` |
 | Genesis の剛体シミュレーション（GPU） | `uv run --frozen python scripts/p0_env_check/genesis_rigid_smoke.py` |
-| オフスクリーン録画（`outputs/p0_env_check/offscreen_record.mp4` を出力） | `uv run --frozen python scripts/p0_env_check/genesis_offscreen_record.py` |
+| オフスクリーン録画（`outputs/p0_env_check/offscreen_record.mp4` を出力し、フレーム数・解像度と映像の変化を検証） | `uv run --frozen python scripts/p0_env_check/genesis_offscreen_record.py` |
 | 対話 Viewer（WSLg。ウィンドウに箱の落下が表示されることを目視する） | `uv run --frozen python scripts/p0_env_check/genesis_viewer_check.py` |
 | ROS 2 の Topic / Action と、venv からの rclpy・torch の同時利用 | `bash scripts/p0_env_check/ros2_smoke.sh` |
 
