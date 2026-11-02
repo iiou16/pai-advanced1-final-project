@@ -114,3 +114,41 @@ class PushRewardConfig:
             raise InvalidPushConfigError(
                 f"reward.intended_face_min_cos は -1 以上 1 以下が必要: {self.intended_face_min_cos}"
             )
+
+
+@dataclass(frozen=True)
+class RuleBasedPushConfig:
+    """規則ベースの箱押し（実験 E1 のベースライン）の制御パラメータ。
+
+    速度と旋回の上限は、歩行方策が学習した速度指令の範囲に収める（範囲外の指令には追従が保証されないため）。
+
+    Attributes:
+        approach_speed_mps: 箱の後ろへ回り込むときの前進速度 [m/s]。正の値。
+        push_speed_mps: 箱を押すときの前進速度 [m/s]。正の値。
+        yaw_gain_per_s: 向きの誤差 [rad] からヨー角速度の指令 [rad/s] を作る比例ゲイン [1/s]。正の値。
+        max_yaw_rate_radps: ヨー角速度の指令の絶対値の上限 [rad/s]。正の値。
+        standoff_m: 押し始める位置（箱の中心から押す方向の逆へ standoff_m 下がった点）までの距離 [m]。
+            箱とロボットの奥行きの半分の和より大きくし、回り込みの途中で箱に触れないようにする。正の値。
+        side_offset_m: 箱の横を回り込むときに、押す方向の線から横へ離す距離 [m]。
+            箱とロボットの幅の半分の和より大きくする。正の値。
+        align_min_cos: 「箱の真後ろにいる」とみなす、ロボット → 箱の向きと押す方向のなす角の余弦の下限。
+            -1 以上 1 以下。1 に近いほど、まっすぐ後ろにいるときだけ押し始める。
+    """
+
+    approach_speed_mps: float
+    push_speed_mps: float
+    yaw_gain_per_s: float
+    max_yaw_rate_radps: float
+    standoff_m: float
+    side_offset_m: float
+    align_min_cos: float
+
+    def __post_init__(self) -> None:
+        _require_positive("rule_based.approach_speed_mps", self.approach_speed_mps)
+        _require_positive("rule_based.push_speed_mps", self.push_speed_mps)
+        _require_positive("rule_based.yaw_gain_per_s", self.yaw_gain_per_s)
+        _require_positive("rule_based.max_yaw_rate_radps", self.max_yaw_rate_radps)
+        _require_positive("rule_based.standoff_m", self.standoff_m)
+        _require_positive("rule_based.side_offset_m", self.side_offset_m)
+        if not -1.0 <= self.align_min_cos <= 1.0:
+            raise InvalidPushConfigError(f"rule_based.align_min_cos は -1 以上 1 以下が必要: {self.align_min_cos}")
