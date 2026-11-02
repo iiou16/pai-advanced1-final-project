@@ -37,7 +37,7 @@ class CommandSegment:
 
 @dataclass(frozen=True)
 class GaitEvaluationScenario:
-    """1 つの評価シナリオ。区間を順に切り替えながら、初期姿勢から続けて走らせる。
+    """1 つの評価シナリオ。全環境をリセットしてから、区間を順に切り替えて続けて走らせる。
 
     Attributes:
         name: シナリオ名。英数字・`_`・`-` だけからなる。評価動画のファイル名に使う。
@@ -53,18 +53,15 @@ class GaitEvaluationScenario:
         if not self.segments:
             raise InvalidEvaluationScenarioError(f"シナリオ {self.name} に区間が無い")
 
-    def duration_s(self) -> float:
-        """シナリオ全体の長さ [s]。"""
-        return sum(segment.duration_s for segment in self.segments)
-
 
 @dataclass(frozen=True)
 class GaitEvaluationSuite:
     """評価シナリオの一式。
 
     Attributes:
-        settle_time_s: 各区間の始めに、追従誤差の集計から除く時間 [s]。指令を切り替えた直後の過渡を除くため。
-            0 以上で、どの区間の長さよりも短い。転倒は除かずに数える。
+        settle_time_s: 追従誤差の集計から除く過渡の時間 [s]。各区間の始め（指令を切り替えた直後）と、転倒した
+            環境の立ち直り（転倒したステップとその後のこの時間）に使う。0 以上で、どの区間の長さよりも短い。
+            転倒そのものは除かずに数える。
         scenarios: 評価シナリオ。1 つ以上で、名前は重複しない。
     """
 

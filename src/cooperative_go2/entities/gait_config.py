@@ -13,7 +13,7 @@ from cooperative_go2.entities.go2 import Go2JointAngles
 QUATERNION_SIZE = 4
 POSITION_SIZE = 3
 # 周期の比が整数かを判定するときの許容誤差。0.02 のような 2 進で割り切れない値の丸め誤差を吸収する
-_INTEGER_RATIO_TOLERANCE = 1e-9
+INTEGER_RATIO_TOLERANCE = 1e-9
 
 
 class InvalidGaitConfigError(ValueError):
@@ -92,7 +92,8 @@ class Go2RobotConfig:
     """Go2 の既定姿勢・PD ゲイン・初期位置。
 
     Attributes:
-        default_joint_angles_rad: 既定姿勢の関節角。行動（残差）の基準と、リセット時の姿勢に使う。
+        default_joint_angles_rad: 既定姿勢の関節角。行動（残差）の基準と、リセット時の関節角の基準（ここに
+            env.reset_joint_pos_noise_rad のノイズを足す）に使う。
         kp: 関節の PD 制御の比例ゲイン。正の値。
         kd: 関節の PD 制御の微分ゲイン。0 以上。
         base_init_pos_m: リセット時の胴体の位置 (x, y, z) [m]。
@@ -238,7 +239,7 @@ class GaitConfig:
 
     def __post_init__(self) -> None:
         steps_per_resample = self.command.resampling_time_s / self.env.control_dt_s
-        if abs(steps_per_resample - round(steps_per_resample)) > _INTEGER_RATIO_TOLERANCE:
+        if abs(steps_per_resample - round(steps_per_resample)) > INTEGER_RATIO_TOLERANCE:
             raise InvalidGaitConfigError(
                 f"command.resampling_time_s ({self.command.resampling_time_s}) は "
                 f"env.control_dt_s ({self.env.control_dt_s}) の整数倍が必要"
@@ -257,6 +258,6 @@ def _ceil_ratio(numerator: float, denominator: float) -> int:
     # 割り切れるはずの比が丸め誤差で整数をわずかに超えても、1 ステップ多く数えないようにする
     ratio = numerator / denominator
     rounded = round(ratio)
-    if abs(ratio - rounded) <= _INTEGER_RATIO_TOLERANCE:
+    if abs(ratio - rounded) <= INTEGER_RATIO_TOLERANCE:
         return rounded
     return int(ratio) + 1

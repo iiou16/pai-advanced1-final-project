@@ -7,7 +7,7 @@ from typing import Protocol
 
 import torch
 
-from cooperative_go2.entities.gait_config import GaitConfig
+from cooperative_go2.entities.gait_config import INTEGER_RATIO_TOLERANCE, GaitConfig
 from cooperative_go2.entities.gait_evaluation import (
     CommandSegment,
     FallRecoveryExclusion,
@@ -45,7 +45,7 @@ class PlannedSegment:
     """制御ステップ数に直した区間。
 
     Attributes:
-        segment: 元の区間。
+        segment: 元の区間。segment.duration_s は num_steps × 制御周期と一致する。
         num_steps: 区間の制御ステップ数。評価の settle_steps より大きい。
     """
 
@@ -81,21 +81,21 @@ class GaitEvaluationPlan:
 def plan_gait_evaluation(training_config: GaitConfig, request: GaitEvaluationRequest) -> GaitEvaluationPlan:
     """学習時の設定と評価の依頼から、評価の条件を決める。
 
-    区間の長さと過渡の時間は、最も近い制御ステップ数に丸める。シナリオは丸めた後のステップ数でエピソードの長さ
-    以内に限る。時間切れで初期姿勢に戻ると、その瞬間が追従誤差に混ざるため。
+    区間の長さと過渡の時間は制御周期の整数倍に限る。丸めると、結果に記録する長さと実際に走らせた長さが食い違うため。
+    シナリオはエピソードの長さ以内に限る。時間切れでリセットされると、その瞬間が追従誤差に混ざるため。
 
     Raises:
-        InvalidEvaluationRequestError: シードが学習と同じ、環境数が正でない、シナリオがエピソードの長さを超える、
-            指令が学習時の範囲（command 節）の外にある、または丸めた結果、区間のステップ数が過渡のステップ数以下になる。
+        InvalidEvaluationRequestError: シードが学習と同じ、環境数が正でない、区間の長さか過渡の時間が制御周期の
+            整数倍でない、シナリオがエピソードの長さを超える、または指令が学習時の範囲（command 節）の外にある。
     """
     env_config = training_config.env
     if request.seed == training_config.training.seed:
         raise InvalidEvaluationRequestError(f"評価のシード {request.seed} が学習のシードと同じ")
     if request.num_envs <= 0:
         raise InvalidEvaluationRequestError(f"評価の環境数は正の整数が必要: {request.num_envs}")
-    settle_steps = round(request.suite.settle_time_s / env_config.control_dt_s)
+    settle_steps = _exact_steps("settle_time_s", request.suite.settle_time_s, env_config.control_dt_s)
     scenarios = tuple(
-        _plan_scenario(scenario, settle_steps, training_config) for scenario in request.suite.scenarios
+        _plan_scenario(scenario, training_config) for scenario in request.suite.scenarios
     )
     evaluation_config = dataclasses.replace(
         training_config, env=dataclasses.replace(env_config, num_envs=request.num_envs)
@@ -103,21 +103,13 @@ def plan_gait_evaluation(training_config: GaitConfig, request: GaitEvaluationReq
     return GaitEvaluationPlan(evaluation_config, scenarios, settle_steps, request.seed)
 
 
-def _plan_scenario(
-    scenario: GaitEvaluationScenario, settle_steps: int, training_config: GaitConfig
-) -> PlannedScenario:
+def _plan_scenario(scenario: GaitEvaluationScenario, training_config: GaitConfig) -> PlannedScenario:
     env_config = training_config.env
     segments = []
     for segment in scenario.segments:
         _require_within_training_range(scenario.name, segment.command, training_config)
-        num_steps = round(segment.duration_s / env_config.control_dt_s)
-        if num_steps <= settle_steps:
-            raise InvalidEvaluationRequestError(
-                f"シナリオ {scenario.name} の区間 {segment.duration_s} s は制御周期 {env_config.control_dt_s} s に"
-                f"丸めると {num_steps} ステップで、過渡の {settle_steps} ステップ以下になる"
-            )
+        num_steps = _exact_steps(f"シナリオ {scenario.name} の区間の長さ", segment.duration_s, env_config.control_dt_s)
         segments.append(PlannedSegment(segment, num_steps))
-    # 区間ごとに丸めたステップ数の合計で比べる。秒の合計がエピソード以内でも、丸めで上限を超えうるため
     total_steps = sum(planned.num_steps for planned in segments)
     if total_steps > training_config.max_episode_length_steps():
         raise InvalidEvaluationRequestError(
@@ -125,6 +117,14 @@ def _plan_scenario(
             f"{training_config.max_episode_length_steps()} ステップを超える"
         )
     return PlannedScenario(scenario.name, tuple(segments))
+
+
+def _exact_steps(name: str, duration_s: float, control_dt_s: float) -> int:
+    ratio = duration_s / control_dt_s
+    steps = round(ratio)
+    if abs(ratio - steps) > INTEGER_RATIO_TOLERANCE:
+        raise InvalidEvaluationRequestError(f"{name} {duration_s} s は制御周期 {control_dt_s} s の整数倍が必要")
+    return steps
 
 
 def _require_within_training_range(

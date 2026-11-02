@@ -37,17 +37,19 @@ source scripts/setup/env.sh
 # 学習（出力: outputs/gait/<run-name>/。同名のディレクトリがあれば上書きせずに止まる）
 uv run --frozen go2-train-gait --config configs/gait.yaml --run-name gait-command-tracking
 
-# 評価（出力: outputs/gait/<run-name>/eval/model_<checkpoint>_seed_<seed>/。--video でシナリオごとに評価動画を撮る）
+# 評価（出力: outputs/gait/<run-name>/eval/model_<checkpoint>_<シナリオのファイル名>_envs_<num-envs>_seed_<seed>/。
+#       --video でシナリオごとに評価動画を撮る）
 uv run --frozen go2-evaluate-gait --run-dir outputs/gait/gait-command-tracking --checkpoint 1500 \
     --scenarios configs/gait_eval.yaml --num-envs 64 --seed 1001 --video
 ```
 
-- 評価の結果は `summary.json`（条件と全結果）と `segments.csv`（シナリオの区間ごとの追従誤差・転倒率）に保存し、シナリオのファイルの写しも置く。保存先が既にあれば上書きせずに止まる。
+- 評価の結果は `segments.csv`（シナリオの区間ごとの追従誤差・転倒率）と `summary.json`（条件と全結果）に保存し、シナリオのファイルの写しも置く。`summary.json` は最後に書くので、これがあれば保存は最後まで終わっている。保存先が既にあれば上書きせずに止まる。
 - 評価のシードは学習のシード（`training.seed`）と別の値にする。同じ値を指定するとエラーで止まる。環境ごとにリセット時の関節角がシードに従ってばらつくので、シードを変えると結果も変わる。乱数はシナリオを順に走らせながら引くため、シナリオを追加・並べ替えると、同じシードでも他のシナリオの初期姿勢が変わる。
-- 各シナリオの長さはエピソードの長さ（`env.episode_length_s`）以内に、指令は学習時の範囲（`command` 節）の中にする。外れるとエラーで止まる。
+- 区間の長さと `settle_time_s` は制御周期（`env.control_dt_s`）の整数倍に、各シナリオの長さはエピソードの長さ（`env.episode_length_s`）以内に、指令は学習時の範囲（`command` 節）の中にする。外れるとエラーで止まる。
 - 追従誤差の集計からは、指令を切り替えた直後の過渡（`settle_time_s`）と、転倒した環境が初期姿勢から立ち直るまでの同じ長さの過渡を除く。転倒は除かずに数える。全環境が転倒し続けて集計できなかった区間の追従誤差は `null`（CSV では空欄）になる。
 - 学習ログは `uv run --frozen tensorboard --logdir outputs/gait` で見る。報酬の項ごとの 1 秒あたりの値（`rew_*`）と、エピソードの終了理由（時間切れ・転倒・物理計算の発散）の割合（`termination_*`）が出る。どちらも、1 反復の中でエピソードが終わったステップごとの値を単純に平均したもの。
 - シーンの構築や学習・評価の途中で失敗した場合も出力先は残る。同じ名前では再実行できないので、出力先を削除するか別の名前を使う。
+- 合格基準: `configs/gait_eval.yaml` の停止（`stop`）・前進（`forward`）・左右のその場旋回（`turn_in_place_left` / `turn_in_place_right`）の各区間で、水平速度の追従誤差の平均が 0.10 m/s 以下、ヨー角速度の追従誤差の平均が 0.15 rad/s 以下、転倒率が 5 % 以下であること。学習に使っていないシードで測った実測値（それぞれ最大 0.032 m/s・0.038 rad/s・0 %）に約 3 倍の余裕を持たせた値。
 - 学習済みの方策を他の処理から使うときは、`interface_adapters.gait_checkpoint.load_gait_controller` で推論器（`GaitController`）を読み込む。自己受容の状態と速度指令から、12 関節の目標角（関節の順序は `GO2_JOINT_NAMES`）を返す。
 
 ## テスト

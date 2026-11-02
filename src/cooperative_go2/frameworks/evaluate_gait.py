@@ -4,8 +4,8 @@
     uv run go2-evaluate-gait --run-dir outputs/gait/gait-command-tracking --checkpoint 1500 \\
         --scenarios configs/gait_eval.yaml --num-envs 64 --seed 1001 --video
 
-結果は <run-dir>/eval/model_<checkpoint>_seed_<seed>/ に、summary.json（条件と全結果）、segments.csv（区間ごと）、
-シナリオのファイルの写しとして保存する。--video を付けると、シナリオごとに環境 0 を追従した評価動画を撮る。
+結果は <run-dir>/eval/model_<checkpoint>_<シナリオのファイル名>_envs_<num-envs>_seed_<seed>/ に、
+summary.json（条件と全結果）、segments.csv（区間ごと）、シナリオのファイルの写しとして保存する。--video を付けると、シナリオごとに環境 0 を追従した評価動画を撮る。
 保存先が既にあれば上書きせずに止まる。環境ごとにリセット時の関節角がシードに従ってばらつくため、
 シードを変えると結果も変わる。
 """
@@ -28,9 +28,9 @@ from cooperative_go2.interface_adapters.gait_checkpoint import checkpoint_path
 from cooperative_go2.interface_adapters.gait_env import Go2GaitEnv
 from cooperative_go2.interface_adapters.gait_evaluation_store import (
     EvaluationOutputExistsError,
+    EvaluationRunKey,
     FileGaitEvaluationStore,
     GaitEvaluationRecord,
-    evaluation_output_dir,
 )
 from cooperative_go2.interface_adapters.gait_rollout import Go2GaitRolloutEnvironment
 from cooperative_go2.interface_adapters.gait_run_store import RUN_CONFIG_FILENAME
@@ -131,7 +131,8 @@ def main(argv: list[str] | None = None) -> None:
         logger.error("%s", error)
         sys.exit(EXIT_INVALID_INPUT)
 
-    output_dir = evaluation_output_dir(args.run_dir, args.checkpoint, plan.seed)
+    run_key = EvaluationRunKey(args.checkpoint, args.scenarios.stem, plan.config.env.num_envs, plan.seed)
+    output_dir = run_key.output_dir(args.run_dir)
     store = FileGaitEvaluationStore(output_dir, args.scenarios)
     try:
         store.initialize()
@@ -153,6 +154,7 @@ def main(argv: list[str] | None = None) -> None:
     record = GaitEvaluationRecord(
         run_dir=str(args.run_dir),
         checkpoint_iteration=args.checkpoint,
+        scenarios_file=str(args.scenarios),
         seed=plan.seed,
         num_envs=plan.config.env.num_envs,
         settle_time_s=suite.settle_time_s,

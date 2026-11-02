@@ -77,14 +77,12 @@ def test_plan_accepts_scenario_equal_to_episode_length(training_config: GaitConf
         {"seed": TRAINING_SEED},
         {"num_envs": 0},
         {"suite": _suite(_scenario("long", (STOP, 15.0), (TURN_IN_PLACE, 5.02)))},
-        # 秒の合計は 19.98 s でエピソード以内だが、1.11 s を 56 ステップに丸めるので合計 1008 ステップになる
-        {"suite": _suite(_scenario("rounded", *[(STOP, 1.11)] * 18))},
-        # 0.01 s は制御周期 0.02 s に丸めると 0 ステップになり、過渡（0 ステップ）以下になる
-        {"suite": _suite(_scenario("short", (STOP, 0.01)), settle_time_s=0.0)},
+        {"suite": _suite(_scenario("fractional", (STOP, 1.11)))},
+        {"suite": _suite(_scenario("stop", (STOP, 1.0)), settle_time_s=0.03)},
         {"suite": _suite(_scenario("fast", (VelocityCommand(vx_mps=5.0, vy_mps=0.0, yaw_rate_radps=0.0), 1.0)))},
     ],
     ids=[
-        "seed-reused", "zero-envs", "longer-than-episode", "longer-after-rounding", "rounds-to-zero-steps",
+        "seed-reused", "zero-envs", "longer-than-episode", "segment-not-multiple-of-dt", "settle-not-multiple-of-dt",
         "outside-training-range",
     ],  # fmt: skip
 )

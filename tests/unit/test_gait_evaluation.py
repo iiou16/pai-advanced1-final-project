@@ -128,12 +128,6 @@ def test_scenario_without_segments_is_rejected() -> None:
         GaitEvaluationScenario(name="empty", segments=())
 
 
-def test_scenario_duration_is_sum_of_segments() -> None:
-    scenario = GaitEvaluationScenario(name="twice", segments=(FORWARD_SEGMENT, FORWARD_SEGMENT))
-
-    assert scenario.duration_s() == pytest.approx(4.0)
-
-
 def test_suite_rejects_duplicate_scenario_names() -> None:
     scenario = GaitEvaluationScenario(name="forward", segments=(FORWARD_SEGMENT,))
 

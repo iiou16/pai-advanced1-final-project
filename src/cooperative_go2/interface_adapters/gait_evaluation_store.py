@@ -3,7 +3,6 @@
 import csv
 import dataclasses
 import json
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,23 +30,42 @@ class GaitEvaluationRecord:
     Attributes:
         run_dir: 評価した学習の出力先。
         checkpoint_iteration: 評価したチェックポイントの反復番号。
+        scenarios_file: 評価に使ったシナリオのファイル。
         seed: 評価用の乱数シード。
         num_envs: 並列に走らせた環境の数。
-        settle_time_s: 各区間の始めに追従誤差の集計から除いた時間 [s]。
+        settle_time_s: 追従誤差の集計から除いた過渡の時間 [s]。各区間の始めと、転倒した環境の立ち直りに使った。
         scenarios: シナリオごとの結果。
     """
 
     run_dir: str
     checkpoint_iteration: int
+    scenarios_file: str
     seed: int
     num_envs: int
     settle_time_s: float
     scenarios: tuple[ScenarioSummary, ...]
 
 
-def evaluation_output_dir(run_dir: Path, checkpoint_iteration: int, seed: int) -> Path:
-    """学習の出力先の下に、チェックポイントとシードごとの評価結果の保存先のパスを作る。ディレクトリはまだ作らない。"""
-    return run_dir / "eval" / f"model_{checkpoint_iteration}_seed_{seed}"
+@dataclass(frozen=True)
+class EvaluationRunKey:
+    """評価結果を左右する条件の組。保存先の名前に使い、条件が違う評価の結果を別々に残す。
+
+    Attributes:
+        checkpoint_iteration: 評価するチェックポイントの反復番号。
+        scenarios_name: シナリオのファイルの名前（拡張子を除く）。
+        num_envs: 並列に走らせる環境の数。
+        seed: 評価用の乱数シード。
+    """
+
+    checkpoint_iteration: int
+    scenarios_name: str
+    num_envs: int
+    seed: int
+
+    def output_dir(self, run_dir: Path) -> Path:
+        """学習の出力先の下に、この条件の評価結果の保存先のパスを作る。ディレクトリはまだ作らない。"""
+        name = f"model_{self.checkpoint_iteration}_{self.scenarios_name}_envs_{self.num_envs}_seed_{self.seed}"
+        return run_dir / "eval" / name
 
 
 class FileGaitEvaluationStore:
@@ -69,27 +87,32 @@ class FileGaitEvaluationStore:
         Raises:
             EvaluationOutputExistsError: 保存先が既にある。過去の結果を上書きしないため止める。
         """
+        # 保存先を作る前に読む。読めずに止まったとき、空の保存先が残って再実行を塞がないようにするため
+        scenarios_content = self._scenarios_source.read_bytes()
         try:
             self._output_dir.mkdir(parents=True, exist_ok=False)
         except FileExistsError as error:
             raise EvaluationOutputExistsError(f"評価結果の保存先が既にある（上書きしない）: {self._output_dir}") from error
-        shutil.copyfile(self._scenarios_source, self._output_dir / SCENARIOS_COPY_FILENAME)
+        (self._output_dir / SCENARIOS_COPY_FILENAME).write_bytes(scenarios_content)
 
     def video_path(self, scenario_name: str) -> Path:
         """シナリオの評価動画（mp4）の保存先を返す。"""
         return self._output_dir / f"{scenario_name}.mp4"
 
     def save(self, record: GaitEvaluationRecord) -> None:
-        """評価の条件と結果を summary.json に、区間ごとの結果を segments.csv に書き出す。"""
-        summary_path = self._output_dir / SUMMARY_FILENAME
-        summary_path.write_text(
-            json.dumps(dataclasses.asdict(record), ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-            encoding="utf-8",
-        )
+        """区間ごとの結果を segments.csv に、評価の条件と結果を summary.json に書き出す。
+
+        summary.json を最後に書くので、summary.json があれば保存が最後まで終わっている。
+        追従誤差を集計できなかった区間の平均は、JSON では null、CSV では空欄になる。
+        """
         with (self._output_dir / SEGMENTS_FILENAME).open("w", encoding="utf-8", newline="") as segments_file:
             writer = csv.writer(segments_file)
             writer.writerow(SEGMENT_CSV_COLUMNS)
             writer.writerows(_segment_rows(record.scenarios))
+        (self._output_dir / SUMMARY_FILENAME).write_text(
+            json.dumps(dataclasses.asdict(record), ensure_ascii=False, indent=2, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
 
 
 def _segment_rows(scenarios: tuple[ScenarioSummary, ...]) -> list[list[object]]:
