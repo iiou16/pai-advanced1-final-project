@@ -10,11 +10,16 @@ from typing import Protocol
 import torch
 from tensordict import TensorDict
 
-from cooperative_go2.entities.episode_reward_tracker import EpisodeRewardTracker, EpisodeSummary
+from cooperative_go2.entities.episode_reward_tracker import EpisodeRewardTracker, EpisodeSummary, EpisodeTrackingSpec
 from cooperative_go2.entities.gait_action import GaitActionHistory, to_joint_targets
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_observation import GaitObservationInputs, build_gait_observation
-from cooperative_go2.entities.gait_reward import GaitRewardInputs, GaitRewardTerms, compute_gait_reward_terms
+from cooperative_go2.entities.gait_reward import (
+    GAIT_REWARD_TERM_NAMES,
+    GaitRewardInputs,
+    GaitRewardTerms,
+    compute_gait_reward_terms,
+)
 from cooperative_go2.entities.gait_termination import TerminationReason, classify_terminations, exceeds_tilt_limit
 from cooperative_go2.entities.go2 import NUM_GO2_JOINTS
 from cooperative_go2.entities.go2_state import Go2State, sample_reset_dof_pos
@@ -111,7 +116,8 @@ class Go2GaitEnv:
         self._simulation = simulation
         self._generator = generator
         self._commands = VelocityCommandSampler(config.command, self.num_envs, generator)
-        self._rewards = EpisodeRewardTracker(self.num_envs, config.env.control_dt_s, self.device)
+        tracking_spec = EpisodeTrackingSpec(GAIT_REWARD_TERM_NAMES, TerminationReason, config.env.control_dt_s)
+        self._rewards = EpisodeRewardTracker(tracking_spec, self.num_envs, self.device)
         self._actions = GaitActionHistory.zeros(self.num_envs, NUM_GO2_JOINTS, self.device)
         self._state = simulation.initial_state
         self.reset()
@@ -155,7 +161,7 @@ class Go2GaitEnv:
         state = self._simulation.read_state()
         reasons = self._classify_terminations(state)
         reward_terms = self._weighted_reward_terms(state, diverged=reasons == int(TerminationReason.SIM_DIVERGED))
-        self._rewards.add_step(reward_terms)
+        self._rewards.add_step(reward_terms.named())
         self._commands.resample(self.episode_length_buf % self.cfg.command_resampling_interval_steps() == 0)
         done = reasons != int(TerminationReason.NONE)
         episode_summary = self._rewards.summarize_completed_or_none(done, reasons)

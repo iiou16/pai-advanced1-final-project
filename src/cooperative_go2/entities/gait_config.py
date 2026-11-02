@@ -233,4 +233,3 @@ class GaitConfig:
     def max_episode_length_steps(self) -> int:
         """1 エピソードの長さを制御ステップ数で返す（端数は切り上げ）。"""
         return ceil_ratio(self.env.episode_length_s, self.env.control_dt_s)
-
