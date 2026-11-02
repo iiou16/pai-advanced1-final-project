@@ -14,6 +14,8 @@ import yaml
 from cooperative_go2.entities.config_validation import InvalidConfigError
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_evaluation import GaitEvaluationSuite, InvalidEvaluationScenarioError
+from cooperative_go2.entities.push_scene_config import BoxConfig
+from cooperative_go2.interface_adapters.genesis_scene_config import GenesisSceneConfig, require_genesis_friction
 from cooperative_go2.interface_adapters.rsl_rl_config import RslRlPpoConfig
 
 _ROOT_KEY_PATH = "<root>"
@@ -34,6 +36,18 @@ class GaitSettings:
 
     gait: GaitConfig
     rsl_rl: RslRlPpoConfig
+
+
+@dataclass(frozen=True)
+class PushSceneSettings:
+    """箱押しのシーンの設定ファイル 1 つ分。box は内側の層に渡し、genesis はシーンの構築にだけ使う。"""
+
+    box: BoxConfig
+    genesis: GenesisSceneConfig
+
+    def __post_init__(self) -> None:
+        # 箱の摩擦はドメインとしては正の値なら意味を持つが、Genesis が受け付ける範囲は狭いため、ここで早めに弾く
+        require_genesis_friction("box.friction", self.box.friction)
 
 
 def load_gait_settings(path: Path) -> GaitSettings:
@@ -60,6 +74,28 @@ def load_gait_evaluation_suite(path: Path) -> GaitEvaluationSuite:
         ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
     """
     return _build_dataclass(GaitEvaluationSuite, _read_yaml(path), _ROOT_KEY_PATH)
+
+
+def load_push_scene_settings(path: Path) -> PushSceneSettings:
+    """箱押しのシーンの設定ファイル（configs/scenes/s1_push.yaml 形式）を読み込み、検証済みの設定を返す。
+
+    Args:
+        path: 設定ファイル。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
+    """
+    return parse_push_scene_settings(_read_yaml(path))
+
+
+def parse_push_scene_settings(data: object) -> PushSceneSettings:
+    """YAML を読み込んだ値（dict）から、検証済みの箱押しのシーンの設定を作る。
+
+    Raises:
+        ConfigValidationError: キーの過不足・型・値が不正。
+    """
+    return _build_dataclass(PushSceneSettings, data, _ROOT_KEY_PATH)
 
 
 def parse_gait_settings(data: object) -> GaitSettings:
