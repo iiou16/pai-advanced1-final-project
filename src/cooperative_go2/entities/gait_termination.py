@@ -33,10 +33,11 @@ def exceeds_tilt_limit(base_euler_deg: torch.Tensor, roll_limit_deg: float, pitc
 def classify_terminations(time_out: torch.Tensor, fallen: torch.Tensor, diverged: torch.Tensor) -> torch.Tensor:
     """環境ごとの終了理由 (num_envs,) を TerminationReason の値で返す。
 
-    発散 > 転倒 > 時間切れ の順に優先する。発散した環境の状態は信頼できず、転倒も時間切れも判定できないため。
+    発散 > 転倒 > 時間切れ の順に優先する。発散した環境の状態は信頼できず転倒を判定できないため発散を最優先にし、
+    転倒は時間切れと重なっても失敗として記録する（時間切れは価値の推定で打ち切りとして扱われるため区別する）。
 
     Args:
-        time_out: エピソードの長さに達した環境のマスク (num_envs,)。
+        time_out: エピソードの長さ（ステップ数）を超えた環境のマスク (num_envs,)。
         fallen: 転倒した環境のマスク (num_envs,)。
         diverged: 物理計算が発散した環境のマスク (num_envs,)。
     """

@@ -20,8 +20,8 @@ class GaitActionHistory:
     @staticmethod
     def zeros(num_envs: int, num_joints: int, device: torch.device | str) -> "GaitActionHistory":
         """行動をまだ出していない状態を返す。"""
-        zeros = torch.zeros((num_envs, num_joints), device=device)
-        return GaitActionHistory(current=zeros, previous=zeros)
+        shape = (num_envs, num_joints)
+        return GaitActionHistory(current=torch.zeros(shape, device=device), previous=torch.zeros(shape, device=device))
 
     def advance(self, raw_actions: torch.Tensor, clip_limit: float) -> "GaitActionHistory":
         """方策の新しい行動を絶対値 clip_limit でクリップして current にし、これまでの current を previous にずらす。"""

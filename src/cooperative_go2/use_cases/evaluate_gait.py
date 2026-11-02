@@ -1,6 +1,7 @@
 """学習済みの歩行方策に固定の速度指令を与えて、追従誤差と転倒を測る流れ。"""
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -9,14 +10,11 @@ import torch
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_evaluation import GaitTrackingAccumulator, GaitTrackingSummary
 from cooperative_go2.entities.velocity_command import VelocityCommand
+from cooperative_go2.use_cases.simulation_errors import SimulationDivergedError
 
 
 class InvalidEvaluationRequestError(ValueError):
-    """評価の依頼が、学習の設定と組み合わせて成り立たないことを表す（シードの再利用、長さの不足・超過など）。"""
-
-
-class SimulationDivergedError(RuntimeError):
-    """評価中に物理計算が発散し、評価の結果を信頼できないことを表す。"""
+    """評価の依頼が成り立たないことを表す（有限でない値、シードの再利用、長さの不足・超過、環境数の不一致など）。"""
 
 
 @dataclass(frozen=True)
@@ -24,8 +22,8 @@ class GaitEvaluationRequest:
     """利用者が指定する評価の条件。
 
     Attributes:
-        command: 全環境に与える速度指令。
-        duration_s: 走らせるシミュレーション時間 [s]。
+        command: 全環境に与える速度指令。各成分は有限の値。
+        duration_s: 走らせるシミュレーション時間 [s]。制御周期の整数倍でなければ、最も近いステップ数に丸める。
         num_envs: 並列に走らせる環境の数。
         seed: 評価用の乱数シード。学習のシードとは別にする。
     """
@@ -59,10 +57,12 @@ def plan_gait_evaluation(training_config: GaitConfig, request: GaitEvaluationReq
     評価はエピソードの長さ以内に限る。時間切れで初期姿勢に戻ると、その瞬間が追従誤差に混ざるため。
 
     Raises:
-        InvalidEvaluationRequestError: シードが学習と同じ、環境数が正でない、時間が 1 制御周期未満、
-            または時間がエピソードの長さを超える。
+        InvalidEvaluationRequestError: 時間や指令が有限でない、シードが学習と同じ、環境数が正でない、
+            時間が丸めると 0 ステップになる、または時間がエピソードの長さを超える。
     """
     env_config = training_config.env
+    if not all(math.isfinite(value) for value in (request.duration_s, *request.command.as_tuple())):
+        raise InvalidEvaluationRequestError(f"評価の時間と速度指令は有限の値が必要: {request}")
     if request.seed == training_config.training.seed:
         raise InvalidEvaluationRequestError(f"評価のシード {request.seed} が学習のシードと同じ")
     if request.num_envs <= 0:
@@ -74,7 +74,7 @@ def plan_gait_evaluation(training_config: GaitConfig, request: GaitEvaluationReq
     num_steps = round(request.duration_s / env_config.control_dt_s)
     if num_steps < 1:
         raise InvalidEvaluationRequestError(
-            f"評価の時間 {request.duration_s} s が制御周期 {env_config.control_dt_s} s に満たない"
+            f"評価の時間 {request.duration_s} s は制御周期 {env_config.control_dt_s} s に丸めると 0 ステップになる"
         )
     evaluation_config = dataclasses.replace(
         training_config, env=dataclasses.replace(env_config, num_envs=request.num_envs)
@@ -166,12 +166,18 @@ class GaitEvaluator:
         """plan.num_steps だけ走らせて集計する。
 
         Raises:
+            InvalidEvaluationRequestError: 環境の数が plan と異なる。
             SimulationDivergedError: 評価中に物理計算が発散した。
         """
+        if self._environment.num_envs != plan.config.env.num_envs:
+            raise InvalidEvaluationRequestError(
+                f"環境の数 {self._environment.num_envs} が評価の条件の {plan.config.env.num_envs} と異なる"
+            )
         if self._recorder is None:
             return self._rollout(plan)
         self._recorder.start()
-        # 評価が例外で止まっても録画のファイルを閉じる。例外はそのまま呼び出し元へ伝わる
+        # 評価が例外で止まっても録画のファイルを閉じる。録画の終了自体が失敗した場合はその例外が優先され、
+        # 評価の例外は __context__ に残る
         try:
             return self._rollout(plan)
         finally:

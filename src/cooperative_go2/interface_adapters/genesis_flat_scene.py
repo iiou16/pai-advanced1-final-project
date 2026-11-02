@@ -1,13 +1,16 @@
-"""シーン S0_flat（平面 ＋ Go2 ×1）を Genesis で構築する。物理ステップを進めるのはこのシーンだけ。"""
+"""シーン S0_flat（平面 ＋ Go2 ×1）を Genesis で構築し、物理ステップと物理計算の異常の検出を担う。"""
 
 from dataclasses import dataclass
 
 import genesis as gs
 import torch
 from genesis.engine.entities import RigidEntity
+from genesis.utils.array_class import ErrorCode
+from genesis.utils.misc import qd_to_torch
 from genesis.vis.camera import Camera
 
 from cooperative_go2.entities.gait_config import GaitConfig
+from cooperative_go2.use_cases.simulation_errors import SimulationSetupError
 
 PLANE_URDF = "urdf/plane/plane.urdf"
 GO2_URDF = "urdf/go2/urdf/go2.urdf"
@@ -15,10 +18,15 @@ GO2_URDF = "urdf/go2/urdf/go2.urdf"
 ENABLE_SELF_COLLISION = False
 # 評価動画は環境 0 の 1 台だけを撮るので、描画する環境を 0 に限る
 RENDERED_ENV_INDICES = (0,)
+# Genesis が環境ごとに立てるエラーのビット。容量の超過は設定の不備、NaN は物理計算の発散として扱いを分ける
+CAPACITY_OVERFLOW_BITS = (
+    ErrorCode.OVERFLOW_COLLISION_PAIRS | ErrorCode.OVERFLOW_CANDIDATE_CONTACTS | ErrorCode.OVERFLOW_CONTACTS
+)
+NAN_BITS = ErrorCode.INVALID_CONTACT_NAN | ErrorCode.INVALID_FORCE_NAN | ErrorCode.INVALID_ACC_NAN
 
 
-class SimulationSetupError(RuntimeError):
-    """Genesis のシーンを構築できなかったことを表す（アセットの読み込み失敗、設定値の不整合など）。"""
+class SimulationCapacityExceededError(SimulationSetupError):
+    """衝突候補や接触点の数が、設定した上限（env.max_collision_pairs など）を超えたことを表す。"""
 
 
 class CameraNotConfiguredError(RuntimeError):
@@ -27,11 +35,11 @@ class CameraNotConfiguredError(RuntimeError):
 
 @dataclass(frozen=True)
 class CameraSpec:
-    """評価動画を撮るオフスクリーンカメラ。カメラは環境 0 の Go2 を追従する。
+    """評価動画を撮るオフスクリーンカメラ。カメラは環境 0 の Go2 を、向きを変えずに追従する。
 
     Attributes:
         resolution: 画像の幅と高さ [px]。
-        offset_m: Go2 の胴体から見たカメラの相対位置 (x, y, z) [m]。
+        offset_m: Go2 の胴体の初期位置からカメラまでの相対位置 (x, y, z) [m]。ワールド座標系の軸で測る。
         fov_deg: 垂直方向の画角 [deg]。
     """
 
@@ -54,10 +62,6 @@ class FlatScene:
     robot: RigidEntity
     camera: Camera | None
 
-    def step(self) -> None:
-        """物理を 1 制御周期進める。"""
-        self.scene.step()
-
     def require_camera(self) -> Camera:
         """評価動画用のカメラを返す。
 
@@ -68,9 +72,27 @@ class FlatScene:
             raise CameraNotConfiguredError("評価動画を撮るには CameraSpec を渡してシーンを構築する必要がある")
         return self.camera
 
+    def step(self) -> None:
+        """物理を 1 制御周期進める。
+
+        Raises:
+            SimulationCapacityExceededError: いずれかの環境で衝突候補・接触点の数が上限を超えた。
+        """
+        self.scene.step()
+        overflowed = (self._error_bits() & CAPACITY_OVERFLOW_BITS) != 0
+        if bool(overflowed.any()):
+            raise SimulationCapacityExceededError(
+                f"衝突候補・接触点の数が上限を超えた環境がある: {torch.nonzero(overflowed).flatten().tolist()}。"
+                "env.max_collision_pairs を見直す"
+            )
+
     def diverged_mask(self) -> torch.Tensor:
-        """物理計算が異常になった環境（NaN、衝突候補の上限超過など）を True とするマスク (num_envs,) を返す。"""
-        return self.scene.rigid_solver.get_error_envs_mask()
+        """直前の物理ステップで NaN が出た（物理計算が発散した）環境を True とするマスク (num_envs,) を返す。"""
+        return (self._error_bits() & NAN_BITS) != 0
+
+    def _error_bits(self) -> torch.Tensor:
+        # Genesis の公開 API（get_error_envs_mask）はエラーの種類を区別しないため、版を固定した上で内部の errno を読む
+        return qd_to_torch(self.scene.rigid_solver._errno)
 
 
 def build_flat_scene(config: GaitConfig, camera_spec: CameraSpec | None) -> FlatScene:
@@ -87,11 +109,11 @@ def build_flat_scene(config: GaitConfig, camera_spec: CameraSpec | None) -> Flat
     """
     try:
         flat_scene = _create_and_build_scene(config, camera_spec)
+        if flat_scene.camera is not None:
+            # build 時点のカメラとロボットの相対位置を保ったまま、向きを変えずに追従する
+            flat_scene.camera.follow_entity(flat_scene.robot, fix_orientation=True)
     except gs.GenesisException as error:
         raise SimulationSetupError(f"シーン S0_flat を構築できない: {error}") from error
-    if flat_scene.camera is not None:
-        # build 時点のカメラとロボットの相対位置を保ったまま、向きを変えずに追従する
-        flat_scene.camera.follow_entity(flat_scene.robot, fix_orientation=True)
     return flat_scene
 
 
@@ -117,7 +139,7 @@ def _create_and_build_scene(config: GaitConfig, camera_spec: CameraSpec | None) 
         robot_pos = robot_config.base_init_pos_m
         camera = scene.add_camera(
             res=camera_spec.resolution,
-            pos=tuple(p + o for p, o in zip(robot_pos, camera_spec.offset_m, strict=True)),
+            pos=tuple(position + offset for position, offset in zip(robot_pos, camera_spec.offset_m, strict=True)),
             lookat=robot_pos,
             fov=camera_spec.fov_deg,
             GUI=False,

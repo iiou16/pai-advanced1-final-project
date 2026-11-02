@@ -14,6 +14,7 @@ from cooperative_go2.interface_adapters.rsl_rl_gait import (
     CheckpointLoadError,
     CheckpointNotFoundError,
     GaitPolicySpecEnvironment,
+    RslRlGaitPolicy,
     load_rsl_rl_gait_policy,
 )
 
@@ -26,13 +27,17 @@ def rsl_rl_config(gait_config_path: Path) -> RslRlPpoConfig:
 
 
 @pytest.fixture
-def checkpoint_path(tmp_path: Path, rsl_rl_config: RslRlPpoConfig) -> Path:
-    """学習直後と同じ形式のチェックポイント（初期化したネットワーク）を保存する。"""
+def saved_runner(rsl_rl_config: RslRlPpoConfig) -> OnPolicyRunner:
+    """学習直後と同じ構成の OnPolicyRunner（初期化したネットワーク）。"""
     torch.manual_seed(0)
     runner_cfg = rsl_rl_config.to_runner_cfg("contract-test")
-    runner = OnPolicyRunner(GaitPolicySpecEnvironment(DEVICE), runner_cfg, None, device=DEVICE)
+    return OnPolicyRunner(GaitPolicySpecEnvironment(DEVICE), runner_cfg, None, device=DEVICE)
+
+
+@pytest.fixture
+def checkpoint_path(tmp_path: Path, saved_runner: OnPolicyRunner) -> Path:
     path = tmp_path / "model_0.pt"
-    runner.save(str(path))
+    saved_runner.save(str(path))
     return path
 
 
@@ -44,13 +49,14 @@ def test_loaded_policy_maps_observation_to_twelve_joint_actions(checkpoint_path,
     assert actions.shape == (5, 12)
 
 
-def test_same_checkpoint_and_input_give_same_output(checkpoint_path, rsl_rl_config) -> None:
+def test_loaded_policy_reproduces_saved_network_output(checkpoint_path, saved_runner, rsl_rl_config) -> None:
     observation = torch.linspace(-1.0, 1.0, GAIT_OBSERVATION_DIM).unsqueeze(0)
+    expected = RslRlGaitPolicy(saved_runner.get_inference_policy(device=DEVICE))(observation)
+    torch.manual_seed(1)  # 読み込み側のネットワークの初期値を保存元と変え、重みが読み込まれたことを確かめる
 
-    first = load_rsl_rl_gait_policy(checkpoint_path, rsl_rl_config, DEVICE)(observation)
-    second = load_rsl_rl_gait_policy(checkpoint_path, rsl_rl_config, DEVICE)(observation)
+    actual = load_rsl_rl_gait_policy(checkpoint_path, rsl_rl_config, DEVICE)(observation)
 
-    assert torch.equal(first, second)
+    assert torch.equal(actual, expected)
 
 
 def test_missing_checkpoint_is_reported(tmp_path, rsl_rl_config) -> None:
@@ -73,6 +79,23 @@ def test_empty_checkpoint_is_rejected(tmp_path, rsl_rl_config) -> None:
     with pytest.raises(CheckpointLoadError) as exc_info:
         load_rsl_rl_gait_policy(empty_checkpoint, rsl_rl_config, DEVICE)
     assert isinstance(exc_info.value.__cause__, EOFError)
+
+
+def test_garbage_checkpoint_is_rejected(tmp_path, rsl_rl_config) -> None:
+    garbage = tmp_path / "model_0.pt"
+    garbage.write_bytes(b"not a checkpoint")
+
+    with pytest.raises(CheckpointLoadError):
+        load_rsl_rl_gait_policy(garbage, rsl_rl_config, DEVICE)
+
+
+def test_checkpoint_with_other_structure_is_rejected(tmp_path, rsl_rl_config) -> None:
+    other_structure = tmp_path / "model_0.pt"
+    torch.save({}, other_structure)
+
+    with pytest.raises(CheckpointLoadError) as exc_info:
+        load_rsl_rl_gait_policy(other_structure, rsl_rl_config, DEVICE)
+    assert isinstance(exc_info.value.__cause__, KeyError)
 
 
 def test_spec_environment_cannot_be_stepped() -> None:

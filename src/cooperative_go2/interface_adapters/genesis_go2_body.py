@@ -1,25 +1,28 @@
 """Genesis の Go2 エンティティと、Go2State・目標関節角との受け渡し。
 
-シーンの構築とは独立しており、箱などを含む別のシーンに置いた Go2 にも使える。
+シーンの構築とは分けてあり、Go2 のエンティティだけに依存する。
 """
 
 import genesis as gs
 import torch
 from genesis.engine.entities import RigidEntity
+from genesis.engine.entities.rigid_entity import RigidJoint
 from genesis.utils.geom import inv_quat, quat_to_xyz, transform_by_quat, transform_quat_by_quat
 
 from cooperative_go2.entities.gait_config import Go2RobotConfig
 from cooperative_go2.entities.go2 import GO2_JOINT_NAMES, NUM_GO2_JOINTS
 from cooperative_go2.entities.go2_state import Go2Proprioception, Go2State, initial_go2_state
+from cooperative_go2.use_cases.simulation_errors import SimulationSetupError
 
 # 浮遊する胴体の一般化座標は、位置 3 ＋ 姿勢の四元数 4 で qpos の先頭に並ぶ
 BASE_QPOS_SIZE = 7
+GO2_QPOS_SIZE = BASE_QPOS_SIZE + NUM_GO2_JOINTS
 BASE_POS_SLICE = slice(0, 3)
 BASE_QUAT_SLICE = slice(3, 7)
 GRAVITY_DIRECTION = (0.0, 0.0, -1.0)
 
 
-class UnexpectedRobotModelError(RuntimeError):
+class UnexpectedRobotModelError(SimulationSetupError):
     """読み込んだ Go2 のモデルが、前提とする構成（浮遊胴体 ＋ 1 自由度の関節 12 個）と異なることを表す。"""
 
 
@@ -32,24 +35,27 @@ class GenesisGo2Body:
     def __init__(self, robot: RigidEntity, robot_config: Go2RobotConfig) -> None:
         """関節の対応を確かめ、PD ゲインを設定する。
 
+        Args:
+            robot: build 済みのシーンに置いた Go2 のエンティティ。
+            robot_config: 既定姿勢・PD ゲイン・初期位置。
+
         Raises:
-            UnexpectedRobotModelError: Go2 のモデルの自由度が想定と異なる。
+            UnexpectedRobotModelError: Go2 のモデルに必要な関節が無い、または自由度が想定と異なる。
         """
         self._robot = robot
-        joints = [robot.get_joint(name) for name in GO2_JOINT_NAMES]
-        expected_qs = BASE_QPOS_SIZE + NUM_GO2_JOINTS
-        if robot.n_qs != expected_qs or any(joint.n_dofs != 1 for joint in joints):
-            raise UnexpectedRobotModelError(
-                f"Go2 の qpos の次元 {robot.n_qs}（想定 {expected_qs}）、関節の自由度 {[joint.n_dofs for joint in joints]}"
-            )
-        self._motor_dofs_idx = [joint.dofs_idx_local[0] for joint in joints]
-        robot.set_dofs_kp([robot_config.kp] * NUM_GO2_JOINTS, self._motor_dofs_idx)
-        robot.set_dofs_kv([robot_config.kd] * NUM_GO2_JOINTS, self._motor_dofs_idx)
+        try:
+            joints = self._find_motor_joints()
+            self._motor_dofs_idx = [joint.dofs_idx_local[0] for joint in joints]
+            robot.set_dofs_kp([robot_config.kp] * NUM_GO2_JOINTS, self._motor_dofs_idx)
+            robot.set_dofs_kv([robot_config.kd] * NUM_GO2_JOINTS, self._motor_dofs_idx)
+        except gs.GenesisException as error:
+            raise UnexpectedRobotModelError(f"Go2 の関節を設定できない: {error}") from error
 
         def tensor(values: object) -> torch.Tensor:
             return torch.tensor(values, dtype=gs.tc_float, device=gs.device)
 
-        self.default_dof_pos = tensor(robot_config.default_joint_angles_rad.in_order())
+        default_angles = robot_config.default_joint_angles_rad.in_order()
+        self.default_dof_pos = tensor(default_angles)
         init_base_pos = tensor(robot_config.base_init_pos_m)
         init_base_quat = tensor(robot_config.base_init_quat_wxyz)
         self._inv_init_base_quat = inv_quat(init_base_quat)
@@ -57,11 +63,20 @@ class GenesisGo2Body:
         self.initial_state = initial_go2_state(
             init_base_pos, transform_by_quat(self._gravity, self._inv_init_base_quat), self.default_dof_pos
         )
-        self._init_qpos = torch.zeros(expected_qs, dtype=gs.tc_float, device=gs.device)
+        self._init_qpos = torch.zeros(GO2_QPOS_SIZE, dtype=gs.tc_float, device=gs.device)
         self._init_qpos[BASE_POS_SLICE] = init_base_pos
         self._init_qpos[BASE_QUAT_SLICE] = init_base_quat
-        for joint, angle in zip(joints, robot_config.default_joint_angles_rad.in_order(), strict=True):
+        for joint, angle in zip(joints, default_angles, strict=True):
             self._init_qpos[joint.qs_idx_local[0]] = angle
+
+    def _find_motor_joints(self) -> list[RigidJoint]:
+        joints = [self._robot.get_joint(name) for name in GO2_JOINT_NAMES]
+        if self._robot.n_qs != GO2_QPOS_SIZE or any(joint.n_dofs != 1 for joint in joints):
+            raise UnexpectedRobotModelError(
+                f"Go2 の qpos の次元 {self._robot.n_qs}（想定 {GO2_QPOS_SIZE}）、"
+                f"関節の自由度 {[joint.n_dofs for joint in joints]}"
+            )
+        return joints
 
     def read_state(self) -> Go2State:
         """現在の状態を読み、速度と重力方向を本体座標系に直して返す。"""

@@ -1,12 +1,13 @@
 """学習済みの歩行方策に固定の速度指令を与え、追従誤差と転倒を測る CLI。
 
-例:
+例（リポジトリのルートで実行する）:
     uv run go2-evaluate-gait --run-dir outputs/gait/gait-baseline --checkpoint 100 \\
         --vx 0.5 --vy 0.0 --yaw-rate 0.0 --num-envs 1 --duration-s 10 --seed 1001 \\
         --video outputs/gait/gait-baseline/eval_forward.mp4
 
 結果は JSON で標準出力に書く。--video を付けると環境 0 を追従した評価動画を撮る。
-現状の評価は決定的で、シードや環境数を変えても結果は変わらない（全環境が同じ初期状態から始まるため）。
+現状の評価は決定的で、全環境が同じ初期状態から始まる。そのため追従誤差の平均と転倒率（fall_rate）は、
+シードや環境数を変えても変わらない。
 """
 
 import argparse
@@ -21,11 +22,12 @@ import genesis as gs
 from cooperative_go2.entities.velocity_command import VelocityCommand
 from cooperative_go2.frameworks.genesis_runtime import init_genesis_on_cuda, make_seeded_generator
 from cooperative_go2.interface_adapters.config_loader import ConfigValidationError, load_gait_settings
+from cooperative_go2.interface_adapters.gait_env import Go2GaitEnv
+from cooperative_go2.interface_adapters.gait_rollout import Go2GaitRolloutEnvironment
 from cooperative_go2.interface_adapters.gait_run_store import RUN_CONFIG_FILENAME
-from cooperative_go2.interface_adapters.genesis_flat_scene import CameraSpec, SimulationSetupError, build_flat_scene
-from cooperative_go2.interface_adapters.genesis_gait_env import GenesisGo2GaitEnv
-from cooperative_go2.interface_adapters.genesis_gait_rollout import GenesisGaitRolloutEnvironment
-from cooperative_go2.interface_adapters.genesis_video_recorder import GenesisVideoRecorder
+from cooperative_go2.interface_adapters.genesis_flat_scene import CameraSpec
+from cooperative_go2.interface_adapters.genesis_gait_simulation import GenesisGaitSimulation
+from cooperative_go2.interface_adapters.genesis_video_recorder import GenesisVideoRecorder, VideoRecordingError
 from cooperative_go2.interface_adapters.rsl_rl_gait import (
     CheckpointLoadError,
     CheckpointNotFoundError,
@@ -35,15 +37,16 @@ from cooperative_go2.use_cases.evaluate_gait import (
     GaitEvaluationRequest,
     GaitEvaluator,
     InvalidEvaluationRequestError,
-    SimulationDivergedError,
     plan_gait_evaluation,
 )
+from cooperative_go2.use_cases.simulation_errors import SimulationDivergedError, SimulationSetupError
 
 # Go2 の全身と足元が入るよう、斜め後ろ上から撮る
 VIDEO_CAMERA = CameraSpec(resolution=(640, 480), offset_m=(-1.5, -1.5, 0.8), fov_deg=40.0)
 EXIT_INVALID_INPUT = 2
 EXIT_SIMULATION_SETUP_FAILED = 4
 EXIT_SIMULATION_DIVERGED = 5
+EXIT_VIDEO_RECORDING_FAILED = 6
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +74,7 @@ def main(argv: list[str] | None = None) -> None:
     """チェックポイントを読み込んで評価し、結果を JSON で出力する。失敗の種類ごとに非ゼロの終了コードで終わる。"""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     args = _parse_args(argv)
-    # 設定の不在・不正、評価の条件の不正、チェックポイントの不在・破損は、いずれも利用者が入力を直すべき点で同じ
+    # 設定の不在・不正と評価の条件の不正は、いずれも利用者が引数か設定を直すべき点で同じなので同じ終了コードにする
     try:
         settings = load_gait_settings(args.run_dir / RUN_CONFIG_FILENAME)
         plan = plan_gait_evaluation(settings.gait, _request_from(args))
@@ -80,27 +83,30 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(EXIT_INVALID_INPUT)
 
     init_genesis_on_cuda(plan.seed)
+    # チェックポイントの不在も破損も、利用者が指定を直すべき入力の誤りとして扱う
     try:
         policy = load_rsl_rl_gait_policy(args.run_dir / f"model_{args.checkpoint}.pt", settings.rsl_rl, gs.device)
     except (CheckpointNotFoundError, CheckpointLoadError) as error:
         logger.error("%s", error)
         sys.exit(EXIT_INVALID_INPUT)
+
     try:
-        scene = build_flat_scene(plan.config, VIDEO_CAMERA if args.video is not None else None)
+        simulation = GenesisGaitSimulation.build(plan.config, VIDEO_CAMERA if args.video is not None else None)
+        env = Go2GaitEnv(plan.config, simulation, make_seeded_generator(plan.seed))
+        recorder = None
+        if args.video is not None:
+            recorder = GenesisVideoRecorder(simulation.scene.require_camera(), args.video, plan.config.env.control_dt_s)
+        summary = GaitEvaluator(Go2GaitRolloutEnvironment(env), policy, recorder).run(plan)
     except SimulationSetupError as error:
         logger.error("%s", error)
         sys.exit(EXIT_SIMULATION_SETUP_FAILED)
-
-    env = GenesisGo2GaitEnv(plan.config, scene, make_seeded_generator(plan.seed))
-    recorder = None
-    if args.video is not None:
-        recorder = GenesisVideoRecorder(scene.require_camera(), args.video, plan.config.env.control_dt_s)
-    try:
-        summary = GaitEvaluator(GenesisGaitRolloutEnvironment(env), policy, recorder).run(plan)
     except SimulationDivergedError as error:
         logger.error("%s", error)
         sys.exit(EXIT_SIMULATION_DIVERGED)
-    print(json.dumps(dataclasses.asdict(summary), ensure_ascii=False, indent=2))
+    except VideoRecordingError as error:
+        logger.error("%s", error)
+        sys.exit(EXIT_VIDEO_RECORDING_FAILED)
+    print(json.dumps(dataclasses.asdict(summary), ensure_ascii=False, indent=2, allow_nan=False))
 
 
 if __name__ == "__main__":

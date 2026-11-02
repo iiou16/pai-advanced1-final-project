@@ -5,6 +5,7 @@
 学習アルゴリズム（PPO）固有の設定はここに置かない。
 """
 
+import math
 from dataclasses import dataclass
 
 from cooperative_go2.entities.go2 import Go2JointAngles
@@ -16,16 +17,23 @@ _INTEGER_RATIO_TOLERANCE = 1e-9
 
 
 class InvalidGaitConfigError(ValueError):
-    """歩行の設定値が不変条件（正の値、範囲の上下関係、要素数など）を満たさないことを表す。"""
+    """歩行の設定値が不変条件（有限の値、正の値、範囲の上下関係、要素数など）を満たさないことを表す。"""
 
 
-def require_positive(name: str, value: float) -> None:
-    """value が正でなければ InvalidGaitConfigError を送出する。name はエラーメッセージに出す設定のキー。"""
+def _require_finite(name: str, value: float) -> None:
+    # NaN は大小比較がすべて偽になり、正の値や範囲の検査をすり抜けるため、先に弾く
+    if not math.isfinite(value):
+        raise InvalidGaitConfigError(f"{name} は有限の値が必要: {value}")
+
+
+def _require_positive(name: str, value: float) -> None:
+    _require_finite(name, value)
     if value <= 0:
         raise InvalidGaitConfigError(f"{name} は正の値が必要: {value}")
 
 
 def _require_non_negative(name: str, value: float) -> None:
+    _require_finite(name, value)
     if value < 0:
         raise InvalidGaitConfigError(f"{name} は 0 以上が必要: {value}")
 
@@ -38,6 +46,8 @@ class ValueRange:
     high: float
 
     def __post_init__(self) -> None:
+        _require_finite("範囲の下限", self.low)
+        _require_finite("範囲の上限", self.high)
         if self.low > self.high:
             raise InvalidGaitConfigError(f"範囲の下限が上限より大きい: low={self.low} high={self.high}")
 
@@ -59,7 +69,7 @@ class VelocityCommandConfig:
     resampling_time_s: float
 
     def __post_init__(self) -> None:
-        require_positive("command.resampling_time_s", self.resampling_time_s)
+        _require_positive("command.resampling_time_s", self.resampling_time_s)
 
 
 @dataclass(frozen=True)
@@ -81,7 +91,7 @@ class Go2RobotConfig:
     base_init_quat_wxyz: tuple[float, ...]
 
     def __post_init__(self) -> None:
-        require_positive("robot.kp", self.kp)
+        _require_positive("robot.kp", self.kp)
         _require_non_negative("robot.kd", self.kd)
         if len(self.base_init_pos_m) != POSITION_SIZE:
             raise InvalidGaitConfigError(f"robot.base_init_pos_m は 3 要素が必要: {self.base_init_pos_m}")
@@ -103,7 +113,7 @@ class GaitEnvConfig:
         simulate_action_latency: True なら 1 制御周期前の行動を適用し、実機の 1 ステップ遅延を模擬する。
         termination_roll_deg: ロールの絶対値がこれを超えたら転倒としてエピソードを終える [deg]。
         termination_pitch_deg: ピッチの絶対値がこれを超えたら転倒としてエピソードを終える [deg]。
-        max_collision_pairs: 物理エンジンが扱う衝突候補の上限。超えた環境は発散と同じ扱いで終了する。
+        max_collision_pairs: 物理エンジンが扱う衝突候補の上限。超えたら設定の不備として学習・評価を止める。
     """
 
     num_envs: int
@@ -118,15 +128,15 @@ class GaitEnvConfig:
     max_collision_pairs: int
 
     def __post_init__(self) -> None:
-        require_positive("env.num_envs", self.num_envs)
-        require_positive("env.control_dt_s", self.control_dt_s)
-        require_positive("env.substeps", self.substeps)
-        require_positive("env.episode_length_s", self.episode_length_s)
-        require_positive("env.action_scale", self.action_scale)
-        require_positive("env.clip_actions", self.clip_actions)
-        require_positive("env.termination_roll_deg", self.termination_roll_deg)
-        require_positive("env.termination_pitch_deg", self.termination_pitch_deg)
-        require_positive("env.max_collision_pairs", self.max_collision_pairs)
+        _require_positive("env.num_envs", self.num_envs)
+        _require_positive("env.control_dt_s", self.control_dt_s)
+        _require_positive("env.substeps", self.substeps)
+        _require_positive("env.episode_length_s", self.episode_length_s)
+        _require_positive("env.action_scale", self.action_scale)
+        _require_positive("env.clip_actions", self.clip_actions)
+        _require_positive("env.termination_roll_deg", self.termination_roll_deg)
+        _require_positive("env.termination_pitch_deg", self.termination_pitch_deg)
+        _require_positive("env.max_collision_pairs", self.max_collision_pairs)
 
 
 @dataclass(frozen=True)
@@ -139,15 +149,15 @@ class GaitObservationScales:
     dof_vel: float
 
     def __post_init__(self) -> None:
-        require_positive("observation.lin_vel", self.lin_vel)
-        require_positive("observation.ang_vel", self.ang_vel)
-        require_positive("observation.dof_pos", self.dof_pos)
-        require_positive("observation.dof_vel", self.dof_vel)
+        _require_positive("observation.lin_vel", self.lin_vel)
+        _require_positive("observation.ang_vel", self.ang_vel)
+        _require_positive("observation.dof_pos", self.dof_pos)
+        _require_positive("observation.dof_vel", self.dof_vel)
 
 
 @dataclass(frozen=True)
 class GaitRewardScales:
-    """報酬の各項の係数。正は報酬、負は減点。0 ならその項を使わない。
+    """報酬の各項の係数。正は報酬、負は減点。0 ならその項は報酬に寄与しない（ログには出る）。
 
     実際の報酬は「項の値 × 係数 × 制御周期」で、制御周期を変えても 1 秒あたりの重みが変わらないようにする。
     フィールド名は GaitRewardTerms と一致させる。
@@ -176,8 +186,8 @@ class GaitRewardConfig:
     scales: GaitRewardScales
 
     def __post_init__(self) -> None:
-        require_positive("reward.tracking_sigma", self.tracking_sigma)
-        require_positive("reward.base_height_target_m", self.base_height_target_m)
+        _require_positive("reward.tracking_sigma", self.tracking_sigma)
+        _require_positive("reward.base_height_target_m", self.base_height_target_m)
 
 
 @dataclass(frozen=True)
@@ -193,7 +203,7 @@ class GaitTrainingConfig:
     max_iterations: int
 
     def __post_init__(self) -> None:
-        require_positive("training.max_iterations", self.max_iterations)
+        _require_positive("training.max_iterations", self.max_iterations)
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
+import genesis as gs
 from genesis.vis.camera import Camera
+
+
+class VideoRecordingError(RuntimeError):
+    """評価動画の録画を開始できない、または書き出せない（エンコーダの失敗など）ことを表す。"""
 
 
 class GenesisVideoRecorder:
@@ -21,10 +26,24 @@ class GenesisVideoRecorder:
         self._fps = round(1.0 / control_dt_s)
 
     def start(self) -> None:
-        """録画を始める。"""
+        """録画を始める。
+
+        Raises:
+            VideoRecordingError: Genesis が録画を開始できなかった。
+        """
         self._video_path.parent.mkdir(parents=True, exist_ok=True)
-        self._camera.start_recording(save_to_filename=str(self._video_path), fps=self._fps)
+        try:
+            self._camera.start_recording(save_to_filename=str(self._video_path), fps=self._fps)
+        except gs.GenesisException as error:
+            raise VideoRecordingError(f"録画を開始できない: {self._video_path}: {error}") from error
 
     def stop(self) -> None:
-        """録画を終えて mp4 を書き出す。"""
-        self._camera.stop_recording()
+        """録画を終えて mp4 を書き出す。
+
+        Raises:
+            VideoRecordingError: Genesis が mp4 を書き出せなかった。
+        """
+        try:
+            self._camera.stop_recording()
+        except gs.GenesisException as error:
+            raise VideoRecordingError(f"録画を書き出せない: {self._video_path}: {error}") from error

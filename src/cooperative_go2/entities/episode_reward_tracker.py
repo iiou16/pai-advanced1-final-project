@@ -5,13 +5,15 @@ from dataclasses import dataclass
 
 import torch
 
-from cooperative_go2.entities.gait_reward import GAIT_REWARD_TERM_NAMES
+from cooperative_go2.entities.gait_reward import GAIT_REWARD_TERM_NAMES, GaitRewardTerms
 from cooperative_go2.entities.gait_termination import TerminationReason
 
 
 @dataclass(frozen=True)
 class EpisodeSummary:
     """1 制御ステップで終了したエピソード群の集計。値は 0 次元テンソル（GPU との同期を増やさないため）。
+
+    RSL-RL は 1 反復の間に得たこの集計を、終了したエピソードの数によらず単純に平均してログに書く。
 
     Attributes:
         reward_per_second: 報酬の項名 → 終了したエピソードの「1 秒あたりの報酬」の平均。
@@ -29,10 +31,10 @@ class EpisodeSummary:
 
 
 class EpisodeRewardTracker:
-    """環境ごとに報酬の項を累積し、エピソードが終わった環境の分を集計して累積を戻す。"""
+    """環境ごとに報酬の項を累積し、エピソードが終わった環境の分を集計する。"""
 
     def __init__(self, num_envs: int, control_dt_s: float, device: torch.device | str) -> None:
-        """全環境の累積を 0 で初期化する。報酬の項は GAIT_REWARD_TERM_NAMES のすべてを扱う。
+        """全環境の累積を 0 で初期化する。
 
         Args:
             num_envs: 並列環境の数。
@@ -43,18 +45,14 @@ class EpisodeRewardTracker:
         self._steps = torch.zeros(num_envs, dtype=torch.int64, device=device)
         self._control_dt_s = control_dt_s
 
-    def add_step(self, terms: Mapping[str, torch.Tensor]) -> None:
-        """1 制御ステップ分の報酬の項 (num_envs,) を累積する。
-
-        Raises:
-            KeyError: GAIT_REWARD_TERM_NAMES のいずれかの項が terms に無い。
-        """
-        for name, sums in self._sums.items():
-            sums += terms[name]
+    def add_step(self, terms: GaitRewardTerms) -> None:
+        """1 制御ステップ分の報酬の項 (num_envs,) を累積する。"""
+        for name, value in terms.named().items():
+            self._sums[name] += value
         self._steps += 1
 
-    def pop_completed_or_none(self, done: torch.Tensor, reasons: torch.Tensor) -> EpisodeSummary | None:
-        """終了した環境 (done が True) の集計を返し、その環境の累積を 0 に戻す。終了した環境が無ければ None を返す。
+    def summarize_completed_or_none(self, done: torch.Tensor, reasons: torch.Tensor) -> EpisodeSummary | None:
+        """終了した環境 (done が True) のエピソードを集計する。終了した環境が無ければ None を返す。累積は変えない。
 
         Args:
             done: このステップでエピソードが終わった環境のマスク (num_envs,)。
@@ -70,7 +68,10 @@ class EpisodeRewardTracker:
             for reason in TerminationReason
             if reason != TerminationReason.NONE
         }
-        for sums in self._sums.values():
-            sums.masked_fill_(done, 0.0)
-        self._steps.masked_fill_(done, 0)
         return EpisodeSummary(reward_per_second=reward_per_second, termination_fraction=termination_fraction)
+
+    def reset_where(self, mask: torch.Tensor) -> None:
+        """mask (num_envs,) が True の環境の累積を 0 に戻す。環境をリセットするたびに呼ぶ。"""
+        for sums in self._sums.values():
+            sums.masked_fill_(mask, 0.0)
+        self._steps.masked_fill_(mask, 0)

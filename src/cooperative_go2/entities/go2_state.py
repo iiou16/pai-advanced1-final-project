@@ -74,15 +74,17 @@ def initial_go2_state(
         projected_gravity: リセット時の姿勢で本体座標系に表した重力方向 (3,)。
         default_dof_pos: 既定姿勢の関節角 (12,) [rad]。
     """
-    zeros3 = torch.zeros((1, 3), dtype=base_pos_m.dtype, device=base_pos_m.device)
+    def zero_row_like(values: torch.Tensor) -> torch.Tensor:
+        return torch.zeros_like(values).unsqueeze(0)
+
     return Go2State(
         proprioception=Go2Proprioception(
-            base_ang_vel=zeros3,
+            base_ang_vel=zero_row_like(base_pos_m),
             projected_gravity=projected_gravity.unsqueeze(0),
             dof_pos=default_dof_pos.unsqueeze(0),
-            dof_vel=torch.zeros_like(default_dof_pos).unsqueeze(0),
+            dof_vel=zero_row_like(default_dof_pos),
         ),
         base_pos_m=base_pos_m.unsqueeze(0),
-        base_euler_deg=zeros3,
-        base_lin_vel=zeros3,
+        base_euler_deg=zero_row_like(base_pos_m),
+        base_lin_vel=zero_row_like(base_pos_m),
     )

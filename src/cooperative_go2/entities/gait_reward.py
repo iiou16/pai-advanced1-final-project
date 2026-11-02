@@ -44,18 +44,19 @@ class GaitRewardTerms:
     def weighted(self, scales: GaitRewardScales, control_dt_s: float) -> "GaitRewardTerms":
         """各項に「係数 × 制御周期」を掛けた項を返す。"""
         return GaitRewardTerms(
-            **{
-                field.name: getattr(self, field.name) * getattr(scales, field.name) * control_dt_s
-                for field in fields(self)
-            }
+            **{name: value * getattr(scales, name) * control_dt_s for name, value in self.named().items()}
         )
+
+    def zeroed_where(self, mask: torch.Tensor) -> "GaitRewardTerms":
+        """mask (num_envs,) が True の環境の値を、すべての項で 0 にした項を返す。"""
+        return GaitRewardTerms(**{name: torch.where(mask, 0.0, value) for name, value in self.named().items()})
 
     def total(self) -> torch.Tensor:
         """全項の和 (num_envs,) を返す。"""
-        return torch.stack([getattr(self, field.name) for field in fields(self)]).sum(dim=0)
+        return torch.stack(list(self.named().values())).sum(dim=0)
 
     def named(self) -> dict[str, torch.Tensor]:
-        """ログ出力用に、項の名前 → 値の対応を返す。"""
+        """項の名前 → 値の対応を、フィールドの定義順で返す。"""
         return {field.name: getattr(self, field.name) for field in fields(self)}
 
 

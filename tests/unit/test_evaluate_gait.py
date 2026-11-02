@@ -13,9 +13,9 @@ from cooperative_go2.use_cases.evaluate_gait import (
     GaitEvaluator,
     GaitRolloutStep,
     InvalidEvaluationRequestError,
-    SimulationDivergedError,
     plan_gait_evaluation,
 )
+from cooperative_go2.use_cases.simulation_errors import SimulationDivergedError
 
 TURN_IN_PLACE = VelocityCommand(vx_mps=0.0, vy_mps=0.0, yaw_rate_radps=1.0)
 TRAINING_SEED = 1
@@ -44,10 +44,27 @@ def test_plan_converts_duration_to_steps_and_overrides_env_count(training_config
     assert plan.config.reward == training_config.reward
 
 
+def test_plan_accepts_duration_equal_to_episode_length(training_config: GaitConfig) -> None:
+    plan = plan_gait_evaluation(training_config, _request(duration_s=20.0))
+
+    assert plan.num_steps == 1000
+
+
 @pytest.mark.parametrize(
     "overrides",
-    [{"seed": TRAINING_SEED}, {"num_envs": 0}, {"duration_s": 0.001}, {"duration_s": 20.02}],
-    ids=["seed-reused", "zero-envs", "shorter-than-control-period", "longer-than-episode"],
+    [
+        {"seed": TRAINING_SEED},
+        {"num_envs": 0},
+        {"duration_s": 0.001},
+        {"duration_s": 20.02},
+        {"duration_s": float("nan")},
+        {"duration_s": float("inf")},
+        {"command": VelocityCommand(vx_mps=float("nan"), vy_mps=0.0, yaw_rate_radps=0.0)},
+    ],
+    ids=[
+        "seed-reused", "zero-envs", "rounds-to-zero-steps", "longer-than-episode",
+        "nan-duration", "inf-duration", "nan-command",
+    ],
 )
 def test_plan_rejects_invalid_request(training_config: GaitConfig, overrides: dict[str, object]) -> None:
     with pytest.raises(InvalidEvaluationRequestError):
@@ -147,3 +164,10 @@ def test_recording_is_stopped_even_when_simulation_diverges(training_config: Gai
         evaluator.run(plan)
 
     assert recorder.events == ["start", "stop"]
+
+
+def test_evaluator_rejects_environment_with_different_env_count(training_config: GaitConfig) -> None:
+    plan = plan_gait_evaluation(training_config, _request(num_envs=2))
+
+    with pytest.raises(InvalidEvaluationRequestError):
+        GaitEvaluator(FakeRolloutEnvironment(num_envs=3), EchoPolicy(), recorder=None).run(plan)

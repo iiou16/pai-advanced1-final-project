@@ -30,6 +30,19 @@ def test_resampled_commands_stay_within_configured_ranges() -> None:
     assert commands[:, 2].min() >= -2.0 and commands[:, 2].max() <= 2.0
 
 
+def test_resampled_commands_spread_over_the_range() -> None:
+    sampler = _sampler(num_envs=256)
+
+    sampler.resample(torch.ones(256, dtype=torch.bool))
+
+    vx = sampler.commands[:, 0]
+    assert vx.min() < -0.8 and vx.max() > 0.8
+
+
+def test_commands_are_zero_before_first_resample() -> None:
+    assert torch.equal(_sampler(num_envs=2).commands, torch.zeros(2, 3))
+
+
 def test_same_seed_gives_same_commands() -> None:
     first, second = _sampler(num_envs=4), _sampler(num_envs=4)
 
@@ -58,3 +71,12 @@ def test_fixed_command_is_applied_to_all_resampled_envs() -> None:
     sampler.resample(torch.ones(2, dtype=torch.bool))
 
     assert torch.equal(sampler.commands, torch.tensor([[0.0, 0.0, 1.5]] * 2))
+
+
+def test_fixed_command_is_not_applied_to_unmasked_envs() -> None:
+    sampler = _sampler(num_envs=2)
+
+    sampler.fix(VelocityCommand(vx_mps=0.0, vy_mps=0.0, yaw_rate_radps=1.5))
+    sampler.resample(torch.tensor([True, False]))
+
+    assert torch.equal(sampler.commands[1], torch.zeros(3))

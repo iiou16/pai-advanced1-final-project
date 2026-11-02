@@ -1,8 +1,10 @@
 """YAML の設定ファイルを読み込み、型付きの設定オブジェクトに変換して検証する。
 
 キーの過不足と値の型を厳密に確かめる。既定値で補わないため、設定ファイルにはすべてのキーを書く。
+数値は有限の値だけを受け付ける（YAML の .nan / .inf は不正とする）。
 """
 
+import math
 from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
 from typing import get_args, get_origin, get_type_hints
@@ -98,8 +100,8 @@ def _convert(expected_type: object, value: object, key_path: str) -> object:
             raise ConfigValidationError(f"{key_path}: 整数が必要だが {value!r} だった")
         return value
     if expected_type is float:
-        if isinstance(value, bool) or not isinstance(value, int | float):
-            raise ConfigValidationError(f"{key_path}: 数値が必要だが {value!r} だった")
+        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+            raise ConfigValidationError(f"{key_path}: 有限の数値が必要だが {value!r} だった")
         return float(value)
     if get_origin(expected_type) is tuple:
         element_type = get_args(expected_type)[0]

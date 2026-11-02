@@ -39,7 +39,8 @@ def _require_hidden_dims(name: str, dims: tuple[int, ...]) -> None:
 class RslRlPpoConfig:
     """RSL-RL の OnPolicyRunner に渡す PPO・ネットワーク・保存間隔の設定。
 
-    各値の意味は RSL-RL の PPO・MLPModel の引数と同じ。save_interval はチェックポイントを保存する反復の間隔。
+    各値の意味は RSL-RL の PPO・MLPModel の引数と同じ。save_interval はチェックポイントを保存する反復の間隔で、
+    反復番号（0 から数える）がその倍数のときと、最後の反復で保存される。
     """
 
     clip_param: float
@@ -114,7 +115,8 @@ class RslRlPpoConfig:
                 "hidden_dims": list(self.critic_hidden_dims),
                 "activation": self.activation,
             },
-            "obs_groups": OBSERVATION_GROUPS,
+            # RSL-RL は不足した観測グループを補うために渡した辞書を書き換えうるので、毎回新しく作る
+            "obs_groups": {group: list(sources) for group, sources in OBSERVATION_GROUPS.items()},
             "num_steps_per_env": self.num_steps_per_env,
             "save_interval": self.save_interval,
             "run_name": run_name,

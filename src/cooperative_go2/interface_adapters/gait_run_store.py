@@ -9,6 +9,21 @@ from cooperative_go2.use_cases.train_gait import RunAlreadyExistsError
 RUN_CONFIG_FILENAME = "gait.yaml"
 
 
+class InvalidRunNameError(ValueError):
+    """学習の出力先の名前が、出力先のルートの直下の 1 つのディレクトリ名として使えないことを表す。"""
+
+
+def resolve_run_dir(runs_root: Path, run_name: str) -> Path:
+    """出力先のルートの直下に、run_name という名前の出力先のパスを作る。ディレクトリはまだ作らない。
+
+    Raises:
+        InvalidRunNameError: run_name が空、`.` / `..`、またはパスの区切りを含む（ルートの外を指しうる）。
+    """
+    if run_name in ("", ".", "..") or Path(run_name).name != run_name or "\\" in run_name:
+        raise InvalidRunNameError(f"出力先の名前は 1 つのディレクトリ名にする: {run_name!r}")
+    return runs_root / run_name
+
+
 class FileGaitRunStore:
     """出力先のディレクトリを作り、学習に使った設定ファイルを複製する。"""
 

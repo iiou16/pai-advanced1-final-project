@@ -10,8 +10,8 @@ from tensordict import TensorDict
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_observation import GAIT_OBSERVATION_DIM
 from cooperative_go2.entities.go2 import NUM_GO2_JOINTS
-from cooperative_go2.interface_adapters.genesis_flat_scene import build_flat_scene
-from cooperative_go2.interface_adapters.genesis_gait_env import GenesisGo2GaitEnv
+from cooperative_go2.interface_adapters.gait_env import Go2GaitEnv
+from cooperative_go2.interface_adapters.genesis_gait_simulation import GenesisGaitSimulation
 from cooperative_go2.interface_adapters.rsl_rl_config import POLICY_OBSERVATION_GROUP, RslRlPpoConfig
 
 
@@ -26,7 +26,14 @@ class CheckpointLoadError(RuntimeError):
 class RslRlGaitTrainer:
     """OnPolicyRunner で歩行方策を学習し、チェックポイントを model_<反復>.pt として出力先に保存する。"""
 
-    def __init__(self, env: GenesisGo2GaitEnv, rsl_rl_config: RslRlPpoConfig, run_dir: Path) -> None:
+    def __init__(self, env: Go2GaitEnv, rsl_rl_config: RslRlPpoConfig, run_dir: Path) -> None:
+        """学習器を組み立てる。ログと設定の写しは run_dir に、実行の名前は run_dir の名前にする。
+
+        Args:
+            env: 学習に使う環境。
+            rsl_rl_config: PPO とネットワークの設定。
+            run_dir: 出力先。学習中にチェックポイント・TensorBoard のログ・リポジトリの差分（git/）を書き込む。
+        """
         runner_cfg = rsl_rl_config.to_runner_cfg(run_dir.name)
         self._runner = OnPolicyRunner(env, runner_cfg, str(run_dir), device=str(env.device))
         # 学習時の本リポジトリのコミットと差分をログに残し、チェックポイントの作成条件を後から辿れるようにする
@@ -53,8 +60,12 @@ class RslRlGaitTrainerFactory:
         self._command_generator = command_generator
 
     def create(self, config: GaitConfig) -> RslRlGaitTrainer:
-        """設定に従ってシーン・環境・学習器を作る。"""
-        env = GenesisGo2GaitEnv(config, build_flat_scene(config, camera_spec=None), self._command_generator)
+        """設定に従ってシーン・環境・学習器を作る。
+
+        Raises:
+            SimulationSetupError: シーンを構築できない、または Go2 のモデルが想定と異なる。
+        """
+        env = Go2GaitEnv(config, GenesisGaitSimulation.build(config, camera_spec=None), self._command_generator)
         return RslRlGaitTrainer(env, self._rsl_rl_config, self._run_dir)
 
 
@@ -87,6 +98,7 @@ class RslRlGaitPolicy:
     """RSL-RL の方策ネットワークを、観測テンソル → 行動テンソルの関数として包む。出力は決定的（分布の平均）。"""
 
     def __init__(self, policy: torch.nn.Module) -> None:
+        """OnPolicyRunner.get_inference_policy() が返した推論用の方策ネットワークを受け取る。"""
         self._policy = policy
 
     def __call__(self, observation: torch.Tensor) -> torch.Tensor:
@@ -115,11 +127,12 @@ def load_rsl_rl_gait_policy(
     runner = OnPolicyRunner(GaitPolicySpecEnvironment(device), runner_cfg, None, device=str(device))
     try:
         runner.load(str(checkpoint_path), map_location=str(device))
-    except torch.OutOfMemoryError:
-        # メモリ不足は RuntimeError の一種だが、チェックポイントの不良ではないので変換せずにそのまま伝える
+    except (torch.OutOfMemoryError, torch.AcceleratorError):
+        # メモリ不足と GPU の実行時エラーは RuntimeError の一種だが、チェックポイントの不良ではないのでそのまま伝える
         raise
-    except (pickle.UnpicklingError, EOFError, RuntimeError) as error:
-        # 中身が壊れている（UnpicklingError）、空や途中で切れている（EOFError）、ネットワークの構成が合わない
-        # （RuntimeError）は、いずれもこのチェックポイントを使えない点で同じ扱いにする
+    except (pickle.UnpicklingError, EOFError, KeyError, IndexError, TypeError, RuntimeError) as error:
+        # 中身が壊れている（UnpicklingError）、空や途中で切れている（EOFError）、学習のチェックポイントとは別の構造
+        # （KeyError・IndexError・TypeError）、ネットワークの構成が合わない（RuntimeError）は、いずれもこの
+        # チェックポイントを使えない点で同じ扱いにする
         raise CheckpointLoadError(f"チェックポイントを読み込めない: {checkpoint_path}: {error}") from error
     return RslRlGaitPolicy(runner.get_inference_policy(device=str(device)))

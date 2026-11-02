@@ -1,6 +1,6 @@
 """歩行方策を学習する CLI。
 
-例:
+例（リポジトリのルートで実行する）:
     uv run go2-train-gait --config configs/gait.yaml --run-name gait-baseline
 
 出力: outputs/gait/<run-name>/ に model_<反復>.pt、TensorBoard のログ、設定ファイルの写し（gait.yaml）。
@@ -13,13 +13,13 @@ from pathlib import Path
 
 from cooperative_go2.frameworks.genesis_runtime import init_genesis_on_cuda, make_seeded_generator
 from cooperative_go2.interface_adapters.config_loader import ConfigValidationError, load_gait_settings
-from cooperative_go2.interface_adapters.gait_run_store import FileGaitRunStore
-from cooperative_go2.interface_adapters.genesis_flat_scene import SimulationSetupError
+from cooperative_go2.interface_adapters.gait_run_store import FileGaitRunStore, InvalidRunNameError, resolve_run_dir
 from cooperative_go2.interface_adapters.rsl_rl_gait import RslRlGaitTrainerFactory
+from cooperative_go2.use_cases.simulation_errors import SimulationSetupError
 from cooperative_go2.use_cases.train_gait import RunAlreadyExistsError, train_gait
 
 GAIT_RUNS_ROOT = Path("outputs/gait")
-EXIT_INVALID_CONFIG = 2
+EXIT_INVALID_INPUT = 2
 EXIT_RUN_ALREADY_EXISTS = 3
 EXIT_SIMULATION_SETUP_FAILED = 4
 
@@ -39,16 +39,16 @@ def main(argv: list[str] | None = None) -> None:
     """設定ファイルを読み込み、歩行方策を学習する。失敗の種類ごとに非ゼロの終了コードで終わる。"""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     args = _parse_args(argv)
-    # 設定ファイルが無いことも内容の不正も、利用者が設定を直すべき点で同じなので同じ終了コードにする
+    # 設定ファイルの不在・不正と出力先の名前の不正は、いずれも利用者が入力を直すべき点で同じなので同じ終了コードにする
     try:
         settings = load_gait_settings(args.config)
-    except (FileNotFoundError, ConfigValidationError) as error:
-        logger.error("設定ファイルを読み込めない: %s", error)
-        sys.exit(EXIT_INVALID_CONFIG)
+        run_dir = resolve_run_dir(GAIT_RUNS_ROOT, args.run_name)
+    except (FileNotFoundError, ConfigValidationError, InvalidRunNameError) as error:
+        logger.error("入力が不正: %s", error)
+        sys.exit(EXIT_INVALID_INPUT)
 
     seed = settings.gait.training.seed
     init_genesis_on_cuda(seed)
-    run_dir = GAIT_RUNS_ROOT / args.run_name
     trainer_factory = RslRlGaitTrainerFactory(run_dir, settings.rsl_rl, make_seeded_generator(seed))
     try:
         train_gait(settings.gait, FileGaitRunStore(run_dir, args.config), trainer_factory)
@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> None:
         logger.error("%s", error)
         sys.exit(EXIT_RUN_ALREADY_EXISTS)
     except SimulationSetupError as error:
-        logger.error("%s", error)
+        logger.error("%s（出力先 %s は残っている。削除するか別の --run-name で再実行する）", error, run_dir)
         sys.exit(EXIT_SIMULATION_SETUP_FAILED)
     logger.info("学習が終わった: %s", run_dir)
 

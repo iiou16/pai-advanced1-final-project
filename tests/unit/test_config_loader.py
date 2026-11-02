@@ -2,6 +2,7 @@ import dataclasses
 from pathlib import Path
 
 import pytest
+import yaml
 
 from cooperative_go2.entities.gait_config import InvalidGaitConfigError
 from cooperative_go2.entities.go2 import GO2_JOINT_NAMES
@@ -125,25 +126,47 @@ def test_invalid_rsl_rl_value_is_rejected(gait_config_data: dict, key: str, valu
     assert isinstance(exc_info.value.__cause__, InvalidRslRlConfigError)
 
 
-def test_command_range_with_low_above_high_is_rejected(gait_config_data: dict) -> None:
-    gait_config_data["command"]["yaw_rate_radps"] = {"low": 1.0, "high": -1.0}
+@pytest.mark.parametrize(
+    ("section", "key", "value"),
+    [
+        ("command", "yaw_rate_radps", {"low": 1.0, "high": -1.0}),
+        ("command", "resampling_time_s", 4.01),
+        ("robot", "base_init_pos_m", [0.0, 0.42]),
+    ],
+    ids=["range-low-above-high", "resampling-not-multiple-of-dt", "position-with-two-elements"],
+)
+def test_inconsistent_gait_value_is_rejected(gait_config_data: dict, section: str, key: str, value: object) -> None:
+    gait_config_data[section][key] = value
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        parse_gait_settings(gait_config_data)
+    assert isinstance(exc_info.value.__cause__, InvalidGaitConfigError)
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value"),
+    [
+        ("env", "control_dt_s", float("nan")),
+        ("reward", "tracking_sigma", float("inf")),
+        ("rsl_rl", "learning_rate", float("nan")),
+        ("command", "lin_vel_x_mps", {"low": float("nan"), "high": 1.0}),
+    ],
+    ids=["nan-dt", "inf-sigma", "nan-learning-rate", "nan-range-bound"],
+)
+def test_non_finite_number_is_rejected(gait_config_data: dict, section: str, key: str, value: object) -> None:
+    gait_config_data[section][key] = value
 
     with pytest.raises(ConfigValidationError):
         parse_gait_settings(gait_config_data)
 
 
-def test_resampling_time_not_multiple_of_control_dt_is_rejected(gait_config_data: dict) -> None:
-    gait_config_data["command"]["resampling_time_s"] = 4.01
+def test_yaml_nan_literal_is_rejected(tmp_path: Path, gait_config_path: Path) -> None:
+    text = gait_config_path.read_text(encoding="utf-8").replace("action_scale: 0.25", "action_scale: .nan")
+    config_path = tmp_path / "nan.yaml"
+    config_path.write_text(text, encoding="utf-8")
 
     with pytest.raises(ConfigValidationError):
-        parse_gait_settings(gait_config_data)
-
-
-def test_base_init_position_needs_three_elements(gait_config_data: dict) -> None:
-    gait_config_data["robot"]["base_init_pos_m"] = [0.0, 0.42]
-
-    with pytest.raises(ConfigValidationError):
-        parse_gait_settings(gait_config_data)
+        load_gait_settings(config_path)
 
 
 def test_non_mapping_root_is_rejected() -> None:
@@ -155,8 +178,9 @@ def test_malformed_yaml_is_rejected(tmp_path: Path) -> None:
     config_path = tmp_path / "broken.yaml"
     config_path.write_text("env: [unclosed", encoding="utf-8")
 
-    with pytest.raises(ConfigValidationError):
+    with pytest.raises(ConfigValidationError) as exc_info:
         load_gait_settings(config_path)
+    assert isinstance(exc_info.value.__cause__, yaml.YAMLError)
 
 
 def test_missing_file_raises_file_not_found(tmp_path: Path) -> None:
