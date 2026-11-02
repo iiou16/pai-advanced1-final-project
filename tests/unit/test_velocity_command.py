@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from cooperative_go2.entities.gait_config import ValueRange, VelocityCommandConfig
@@ -6,17 +7,19 @@ from cooperative_go2.entities.velocity_command import VelocityCommand, VelocityC
 SEED = 7
 
 
-def _config() -> VelocityCommandConfig:
+def _config(zero_lin_vel_probability: float = 0.0, zero_yaw_rate_probability: float = 0.0) -> VelocityCommandConfig:
     return VelocityCommandConfig(
         lin_vel_x_mps=ValueRange(low=-1.0, high=1.0),
         lin_vel_y_mps=ValueRange(low=0.0, high=0.0),
         yaw_rate_radps=ValueRange(low=-2.0, high=2.0),
+        zero_lin_vel_probability=zero_lin_vel_probability,
+        zero_yaw_rate_probability=zero_yaw_rate_probability,
         resampling_time_s=4.0,
     )
 
 
-def _sampler(num_envs: int) -> VelocityCommandSampler:
-    return VelocityCommandSampler(_config(), num_envs, torch.Generator().manual_seed(SEED))
+def _sampler(num_envs: int, config: VelocityCommandConfig | None = None) -> VelocityCommandSampler:
+    return VelocityCommandSampler(config or _config(), num_envs, torch.Generator().manual_seed(SEED))
 
 
 def test_resampled_commands_stay_within_configured_ranges() -> None:
@@ -73,10 +76,47 @@ def test_fixed_command_is_applied_to_all_resampled_envs() -> None:
     assert torch.equal(sampler.commands, torch.tensor([[0.0, 0.0, 1.5]] * 2))
 
 
-def test_fixed_command_is_not_applied_to_unmasked_envs() -> None:
+def test_fixing_replaces_current_commands_immediately() -> None:
     sampler = _sampler(num_envs=2)
+    sampler.resample(torch.ones(2, dtype=torch.bool))
 
-    sampler.fix(VelocityCommand(vx_mps=0.0, vy_mps=0.0, yaw_rate_radps=1.5))
-    sampler.resample(torch.tensor([True, False]))
+    sampler.fix(VelocityCommand(vx_mps=0.3, vy_mps=0.1, yaw_rate_radps=-0.5))
 
-    assert torch.equal(sampler.commands[1], torch.zeros(3))
+    assert torch.allclose(sampler.commands, torch.tensor([[0.3, 0.1, -0.5]] * 2))
+
+
+def test_certain_zero_probabilities_give_standstill_commands() -> None:
+    sampler = _sampler(num_envs=8, config=_config(zero_lin_vel_probability=1.0, zero_yaw_rate_probability=1.0))
+
+    sampler.resample(torch.ones(8, dtype=torch.bool))
+
+    assert torch.equal(sampler.commands, torch.zeros(8, 3))
+
+
+def test_zero_lin_vel_keeps_yaw_rate_for_turning_in_place() -> None:
+    sampler = _sampler(num_envs=8, config=_config(zero_lin_vel_probability=1.0))
+
+    sampler.resample(torch.ones(8, dtype=torch.bool))
+
+    assert torch.equal(sampler.commands[:, :2], torch.zeros(8, 2))
+    assert (sampler.commands[:, 2] != 0.0).all()
+
+
+@pytest.mark.parametrize(
+    ("zero_lin_vel_probability", "zero_yaw_rate_probability"),
+    [(0.3, 0.0), (0.0, 0.3)],
+    ids=["zero-lin-vel", "zero-yaw-rate"],
+)
+def test_components_are_zeroed_at_configured_rate(
+    zero_lin_vel_probability: float, zero_yaw_rate_probability: float
+) -> None:
+    num_envs = 4000
+    config = _config(zero_lin_vel_probability, zero_yaw_rate_probability)
+    sampler = _sampler(num_envs, config)
+
+    sampler.resample(torch.ones(num_envs, dtype=torch.bool))
+
+    zero_vx_rate = (sampler.commands[:, 0] == 0.0).float().mean().item()
+    zero_yaw_rate_rate = (sampler.commands[:, 2] == 0.0).float().mean().item()
+    assert zero_vx_rate == pytest.approx(zero_lin_vel_probability, abs=0.03)
+    assert zero_yaw_rate_rate == pytest.approx(zero_yaw_rate_probability, abs=0.03)

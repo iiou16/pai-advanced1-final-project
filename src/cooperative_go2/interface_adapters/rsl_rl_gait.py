@@ -47,17 +47,17 @@ class RslRlGaitTrainer:
 class RslRlGaitTrainerFactory:
     """シーン S0_flat の歩行環境と RSL-RL の学習器を組み立てる。前提: gs.init() 済みであること。"""
 
-    def __init__(self, run_dir: Path, rsl_rl_config: RslRlPpoConfig, command_generator: torch.Generator) -> None:
+    def __init__(self, run_dir: Path, rsl_rl_config: RslRlPpoConfig, generator: torch.Generator) -> None:
         """学習器の組み立てに使う出力先・設定・乱数生成器を受け取る。
 
         Args:
             run_dir: 学習の出力先。
             rsl_rl_config: PPO とネットワークの設定。
-            command_generator: 学習中の速度指令を引く乱数生成器。学習のシードで固定して渡す。
+            generator: 学習中の速度指令とリセット時の関節角のノイズを引く乱数生成器。学習のシードで固定して渡す。
         """
         self._run_dir = run_dir
         self._rsl_rl_config = rsl_rl_config
-        self._command_generator = command_generator
+        self._generator = generator
 
     def create(self, config: GaitConfig) -> RslRlGaitTrainer:
         """設定に従ってシーン・環境・学習器を作る。
@@ -65,7 +65,7 @@ class RslRlGaitTrainerFactory:
         Raises:
             SimulationSetupError: シーンを構築できない、または Go2 のモデルが想定と異なる。
         """
-        env = Go2GaitEnv(config, GenesisGaitSimulation.build(config, camera_spec=None), self._command_generator)
+        env = Go2GaitEnv(config, GenesisGaitSimulation.build(config, camera_spec=None), self._generator)
         return RslRlGaitTrainer(env, self._rsl_rl_config, self._run_dir)
 
 
@@ -95,11 +95,14 @@ class GaitPolicySpecEnvironment:
 
 
 class RslRlGaitPolicy:
-    """RSL-RL の方策ネットワークを、観測テンソル → 行動テンソルの関数として包む。出力は決定的（分布の平均）。"""
+    """RSL-RL の方策ネットワークを、観測テンソル → 行動テンソルの関数として包む。
+
+    出力は決定的（分布の平均）。パラメータは勾配を計算しない設定にして固定する。
+    """
 
     def __init__(self, policy: torch.nn.Module) -> None:
-        """OnPolicyRunner.get_inference_policy() が返した推論用の方策ネットワークを受け取る。"""
-        self._policy = policy
+        """OnPolicyRunner.get_inference_policy() が返した推論用の方策ネットワークを受け取り、パラメータを固定する。"""
+        self._policy = policy.requires_grad_(False)
 
     def __call__(self, observation: torch.Tensor) -> torch.Tensor:
         """観測 (num_envs, GAIT_OBSERVATION_DIM) から行動 (num_envs, 12) を返す。"""

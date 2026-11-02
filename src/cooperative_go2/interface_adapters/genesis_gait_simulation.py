@@ -56,6 +56,6 @@ class GenesisGaitSimulation:
         """直前の物理ステップで物理計算が発散した環境のマスク (num_envs,) を返す。"""
         return self.scene.diverged_mask()
 
-    def reset(self, mask: torch.Tensor) -> None:
-        """mask (num_envs,) が True の環境の Go2 を初期位置・既定姿勢で静止させる。"""
-        self._body.reset(mask)
+    def reset(self, mask: torch.Tensor, dof_pos: torch.Tensor) -> None:
+        """mask (num_envs,) が True の環境の Go2 を初期位置で、関節角を dof_pos (num_envs, 12) [rad] にして静止させる。"""
+        self._body.reset(mask, dof_pos)

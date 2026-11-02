@@ -5,9 +5,11 @@ import pytest
 import yaml
 
 from cooperative_go2.entities.gait_config import InvalidGaitConfigError
+from cooperative_go2.entities.gait_evaluation import InvalidEvaluationScenarioError
 from cooperative_go2.entities.go2 import GO2_JOINT_NAMES
 from cooperative_go2.interface_adapters.config_loader import (
     ConfigValidationError,
+    load_gait_evaluation_suite,
     load_gait_settings,
     parse_gait_settings,
 )
@@ -132,8 +134,14 @@ def test_invalid_rsl_rl_value_is_rejected(gait_config_data: dict, key: str, valu
         ("command", "yaw_rate_radps", {"low": 1.0, "high": -1.0}),
         ("command", "resampling_time_s", 4.01),
         ("robot", "base_init_pos_m", [0.0, 0.42]),
+        ("command", "zero_lin_vel_probability", 1.5),
+        ("command", "zero_yaw_rate_probability", -0.1),
+        ("env", "reset_joint_pos_noise_rad", -0.1),
     ],
-    ids=["range-low-above-high", "resampling-not-multiple-of-dt", "position-with-two-elements"],
+    ids=[
+        "range-low-above-high", "resampling-not-multiple-of-dt", "position-with-two-elements",
+        "probability-above-one", "negative-probability", "negative-reset-noise",
+    ],  # fmt: skip
 )
 def test_inconsistent_gait_value_is_rejected(gait_config_data: dict, section: str, key: str, value: object) -> None:
     gait_config_data[section][key] = value
@@ -186,3 +194,48 @@ def test_malformed_yaml_is_rejected(tmp_path: Path) -> None:
 def test_missing_file_raises_file_not_found(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_gait_settings(tmp_path / "absent.yaml")
+
+
+def test_repository_evaluation_scenarios_are_valid(gait_eval_config_path: Path) -> None:
+    suite = load_gait_evaluation_suite(gait_eval_config_path)
+
+    names = [scenario.name for scenario in suite.scenarios]
+    assert {"stop", "forward", "turn_in_place_left", "turn_in_place_right", "direction_change"} <= set(names)
+
+
+def test_evaluation_scenarios_within_training_command_range(
+    gait_eval_config_path: Path, gait_config_path: Path
+) -> None:
+    command_config = load_gait_settings(gait_config_path).gait.command
+    ranges = (command_config.lin_vel_x_mps, command_config.lin_vel_y_mps, command_config.yaw_rate_radps)
+
+    suite = load_gait_evaluation_suite(gait_eval_config_path)
+
+    for scenario in suite.scenarios:
+        for segment in scenario.segments:
+            for value, value_range in zip(segment.command.as_tuple(), ranges, strict=True):
+                assert value_range.low <= value <= value_range.high, scenario.name
+
+
+def _write_scenarios(tmp_path: Path, data: object) -> Path:
+    path = tmp_path / "scenarios.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return path
+
+
+def test_evaluation_scenario_with_duplicate_names_is_rejected(tmp_path: Path) -> None:
+    segment = {"command": {"vx_mps": 0.0, "vy_mps": 0.0, "yaw_rate_radps": 0.0}, "duration_s": 2.0}
+    scenario = {"name": "stop", "segments": [segment]}
+    path = _write_scenarios(tmp_path, {"settle_time_s": 1.0, "scenarios": [scenario, scenario]})
+
+    with pytest.raises(ConfigValidationError) as exc_info:
+        load_gait_evaluation_suite(path)
+    assert isinstance(exc_info.value.__cause__, InvalidEvaluationScenarioError)
+
+
+def test_evaluation_scenario_with_missing_command_key_is_rejected(tmp_path: Path) -> None:
+    segment = {"command": {"vx_mps": 0.0, "yaw_rate_radps": 0.0}, "duration_s": 2.0}
+    path = _write_scenarios(tmp_path, {"settle_time_s": 1.0, "scenarios": [{"name": "stop", "segments": [segment]}]})
+
+    with pytest.raises(ConfigValidationError):
+        load_gait_evaluation_suite(path)

@@ -12,6 +12,7 @@ from typing import get_args, get_origin, get_type_hints
 import yaml
 
 from cooperative_go2.entities.gait_config import GaitConfig, InvalidGaitConfigError
+from cooperative_go2.entities.gait_evaluation import GaitEvaluationSuite, InvalidEvaluationScenarioError
 from cooperative_go2.interface_adapters.rsl_rl_config import InvalidRslRlConfigError, RslRlPpoConfig
 
 _ROOT_KEY_PATH = "<root>"
@@ -44,12 +45,20 @@ def load_gait_settings(path: Path) -> GaitSettings:
         FileNotFoundError: ファイルが無い。
         ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
     """
-    text = path.read_text(encoding="utf-8")
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as error:
-        raise ConfigValidationError(f"{path}: YAML として読めない: {error}") from error
-    return parse_gait_settings(data)
+    return parse_gait_settings(_read_yaml(path))
+
+
+def load_gait_evaluation_suite(path: Path) -> GaitEvaluationSuite:
+    """歩行方策の評価シナリオのファイル（configs/gait_eval.yaml 形式）を読み込み、検証済みのシナリオ一式を返す。
+
+    Args:
+        path: シナリオのファイル。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
+    """
+    return _build_dataclass(GaitEvaluationSuite, _read_yaml(path), _ROOT_KEY_PATH)
 
 
 def parse_gait_settings(data: object) -> GaitSettings:
@@ -68,6 +77,14 @@ def parse_gait_settings(data: object) -> GaitSettings:
     )
 
 
+def _read_yaml(path: Path) -> object:
+    text = path.read_text(encoding="utf-8")
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        raise ConfigValidationError(f"{path}: YAML として読めない: {error}") from error
+
+
 def _join_key(parent: str, child: str) -> str:
     return child if parent == _ROOT_KEY_PATH else f"{parent}.{child}"
 
@@ -81,10 +98,10 @@ def _build_dataclass[T](cls: type[T], data: object, key_path: str) -> T:
         raise ConfigValidationError(f"{key_path}: キーの過不足 不足={sorted(missing)} 未知={sorted(unknown)}")
     type_hints = get_type_hints(cls)
     kwargs = {name: _convert(type_hints[name], mapping[name], _join_key(key_path, name)) for name in expected_keys}
-    # 不変条件の違反は、どちらの設定でも「設定ファイルを直すべき」点で同じなので同じ例外に変換する
+    # 不変条件の違反は、どの設定でも「設定ファイルを直すべき」点で同じなので同じ例外に変換する
     try:
         return cls(**kwargs)
-    except (InvalidGaitConfigError, InvalidRslRlConfigError) as error:
+    except (InvalidGaitConfigError, InvalidRslRlConfigError, InvalidEvaluationScenarioError) as error:
         raise ConfigValidationError(f"{key_path}: {error}") from error
 
 

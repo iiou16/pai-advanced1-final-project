@@ -1,20 +1,28 @@
-"""学習済みの歩行方策に固定の速度指令を与えて、追従誤差と転倒を測る流れ。"""
+"""学習済みの歩行方策に評価シナリオの速度指令を与えて、区間ごとの追従誤差と転倒を測る流れ。"""
 
 import dataclasses
-import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
 import torch
 
-from cooperative_go2.entities.gait_config import GaitConfig
-from cooperative_go2.entities.gait_evaluation import GaitTrackingAccumulator, GaitTrackingSummary
+from cooperative_go2.entities.gait_config import INTEGER_RATIO_TOLERANCE, GaitConfig
+from cooperative_go2.entities.gait_evaluation import (
+    CommandSegment,
+    FallRecoveryExclusion,
+    GaitEvaluationScenario,
+    GaitEvaluationSuite,
+    ScenarioSummary,
+    SegmentTrackingAccumulator,
+    SegmentTrackingSummary,
+)
 from cooperative_go2.entities.velocity_command import VelocityCommand
-from cooperative_go2.use_cases.simulation_errors import SimulationDivergedError
+from cooperative_go2.use_cases.gait_controller import GaitPolicy
 
 
 class InvalidEvaluationRequestError(ValueError):
-    """評価の依頼が成り立たないことを表す（有限でない値、シードの再利用、長さの不足・超過、環境数の不一致など）。"""
+    """評価の依頼が成り立たないことを表す（シードの再利用、環境数、シナリオの長さの超過・不足、環境数の不一致など）。"""
 
 
 @dataclass(frozen=True)
@@ -22,16 +30,35 @@ class GaitEvaluationRequest:
     """利用者が指定する評価の条件。
 
     Attributes:
-        command: 全環境に与える速度指令。各成分は有限の値。
-        duration_s: 走らせるシミュレーション時間 [s]。制御周期の整数倍でなければ、最も近いステップ数に丸める。
-        num_envs: 並列に走らせる環境の数。
+        suite: 評価シナリオの一式。
+        num_envs: 並列に走らせる環境の数。環境ごとにリセット時の初期姿勢が異なる。
         seed: 評価用の乱数シード。学習のシードとは別にする。
     """
 
-    command: VelocityCommand
-    duration_s: float
+    suite: GaitEvaluationSuite
     num_envs: int
     seed: int
+
+
+@dataclass(frozen=True)
+class PlannedSegment:
+    """制御ステップ数に直した区間。
+
+    Attributes:
+        segment: 元の区間。segment.duration_s は num_steps × 制御周期と一致する。
+        num_steps: 区間の制御ステップ数。評価の settle_steps より大きい。
+    """
+
+    segment: CommandSegment
+    num_steps: int
+
+
+@dataclass(frozen=True)
+class PlannedScenario:
+    """制御ステップ数に直したシナリオ。"""
+
+    name: str
+    segments: tuple[PlannedSegment, ...]
 
 
 @dataclass(frozen=True)
@@ -40,46 +67,77 @@ class GaitEvaluationPlan:
 
     Attributes:
         config: 評価に使う設定（学習時の設定の環境数だけを置き換えたもの）。
-        command: 全環境に与える速度指令。
-        num_steps: 走らせる制御ステップ数。1 以上。
+        scenarios: 評価シナリオ。依頼と同じ順。
+        settle_steps: 追従誤差から除く過渡のステップ数。各区間の始めと、転倒した環境の立ち直りに使う。
         seed: 評価用の乱数シード。
     """
 
     config: GaitConfig
-    command: VelocityCommand
-    num_steps: int
+    scenarios: tuple[PlannedScenario, ...]
+    settle_steps: int
     seed: int
 
 
 def plan_gait_evaluation(training_config: GaitConfig, request: GaitEvaluationRequest) -> GaitEvaluationPlan:
     """学習時の設定と評価の依頼から、評価の条件を決める。
 
-    評価はエピソードの長さ以内に限る。時間切れで初期姿勢に戻ると、その瞬間が追従誤差に混ざるため。
+    区間の長さと過渡の時間は制御周期の整数倍に限る。丸めると、結果に記録する長さと実際に走らせた長さが食い違うため。
+    シナリオはエピソードの長さ以内に限る。時間切れでリセットされると、その瞬間が追従誤差に混ざるため。
 
     Raises:
-        InvalidEvaluationRequestError: 時間や指令が有限でない、シードが学習と同じ、環境数が正でない、
-            時間が丸めると 0 ステップになる、または時間がエピソードの長さを超える。
+        InvalidEvaluationRequestError: シードが学習と同じ、環境数が正でない、区間の長さか過渡の時間が制御周期の
+            整数倍でない、シナリオがエピソードの長さを超える、または指令が学習時の範囲（command 節）の外にある。
     """
     env_config = training_config.env
-    if not all(math.isfinite(value) for value in (request.duration_s, *request.command.as_tuple())):
-        raise InvalidEvaluationRequestError(f"評価の時間と速度指令は有限の値が必要: {request}")
     if request.seed == training_config.training.seed:
         raise InvalidEvaluationRequestError(f"評価のシード {request.seed} が学習のシードと同じ")
     if request.num_envs <= 0:
         raise InvalidEvaluationRequestError(f"評価の環境数は正の整数が必要: {request.num_envs}")
-    if request.duration_s > env_config.episode_length_s:
-        raise InvalidEvaluationRequestError(
-            f"評価の時間 {request.duration_s} s がエピソードの長さ {env_config.episode_length_s} s を超える"
-        )
-    num_steps = round(request.duration_s / env_config.control_dt_s)
-    if num_steps < 1:
-        raise InvalidEvaluationRequestError(
-            f"評価の時間 {request.duration_s} s は制御周期 {env_config.control_dt_s} s に丸めると 0 ステップになる"
-        )
+    settle_steps = _exact_steps("settle_time_s", request.suite.settle_time_s, env_config.control_dt_s)
+    scenarios = tuple(
+        _plan_scenario(scenario, training_config) for scenario in request.suite.scenarios
+    )
     evaluation_config = dataclasses.replace(
         training_config, env=dataclasses.replace(env_config, num_envs=request.num_envs)
     )
-    return GaitEvaluationPlan(evaluation_config, request.command, num_steps, request.seed)
+    return GaitEvaluationPlan(evaluation_config, scenarios, settle_steps, request.seed)
+
+
+def _plan_scenario(scenario: GaitEvaluationScenario, training_config: GaitConfig) -> PlannedScenario:
+    env_config = training_config.env
+    segments = []
+    for segment in scenario.segments:
+        _require_within_training_range(scenario.name, segment.command, training_config)
+        num_steps = _exact_steps(f"シナリオ {scenario.name} の区間の長さ", segment.duration_s, env_config.control_dt_s)
+        segments.append(PlannedSegment(segment, num_steps))
+    total_steps = sum(planned.num_steps for planned in segments)
+    if total_steps > training_config.max_episode_length_steps():
+        raise InvalidEvaluationRequestError(
+            f"シナリオ {scenario.name} の長さ {total_steps} ステップがエピソードの長さ "
+            f"{training_config.max_episode_length_steps()} ステップを超える"
+        )
+    return PlannedScenario(scenario.name, tuple(segments))
+
+
+def _exact_steps(name: str, duration_s: float, control_dt_s: float) -> int:
+    ratio = duration_s / control_dt_s
+    steps = round(ratio)
+    if abs(ratio - steps) > INTEGER_RATIO_TOLERANCE:
+        raise InvalidEvaluationRequestError(f"{name} {duration_s} s は制御周期 {control_dt_s} s の整数倍が必要")
+    return steps
+
+
+def _require_within_training_range(
+    scenario_name: str, command: VelocityCommand, training_config: GaitConfig
+) -> None:
+    # 学習していない指令で測った追従誤差は方策の性能を表さないため、評価の対象にしない
+    command_config = training_config.command
+    ranges = (command_config.lin_vel_x_mps, command_config.lin_vel_y_mps, command_config.yaw_rate_radps)
+    for value, value_range in zip(command.as_tuple(), ranges, strict=True):
+        if not value_range.low <= value <= value_range.high:
+            raise InvalidEvaluationRequestError(
+                f"シナリオ {scenario_name} の指令 {command} が学習時の範囲（command 節）の外にある"
+            )
 
 
 @dataclass(frozen=True)
@@ -100,7 +158,7 @@ class GaitRolloutStep:
 
 
 class GaitRolloutEnvironment(Protocol):
-    """速度指令を固定して歩行方策を走らせる環境。"""
+    """速度指令を外から与えて歩行方策を走らせる環境。"""
 
     @property
     def num_envs(self) -> int:
@@ -113,7 +171,11 @@ class GaitRolloutEnvironment(Protocol):
         ...
 
     def reset_with_command(self, command: VelocityCommand) -> torch.Tensor:
-        """全環境を初期姿勢に戻し、以後の速度指令を固定する。初期観測を返す。"""
+        """全環境を初期姿勢に戻し、速度指令を command に固定する。初期観測を返す。"""
+        ...
+
+    def switch_command(self, command: VelocityCommand) -> torch.Tensor:
+        """リセットせずに、全環境の速度指令を直ちに command に切り替える。新しい指令を含む観測を返す。"""
         ...
 
     def step(self, actions: torch.Tensor) -> GaitRolloutStep:
@@ -122,14 +184,6 @@ class GaitRolloutEnvironment(Protocol):
         Raises:
             SimulationDivergedError: いずれかの環境で物理計算が発散した。
         """
-        ...
-
-
-class GaitPolicy(Protocol):
-    """観測から行動（既定姿勢からの 12 関節の残差）を出す推論専用の方策。"""
-
-    def __call__(self, observation: torch.Tensor) -> torch.Tensor:
-        """観測 (num_envs, GAIT_OBSERVATION_DIM) から行動 (num_envs, 12) を返す。"""
         ...
 
 
@@ -145,25 +199,38 @@ class VideoRecorder(Protocol):
         ...
 
 
+# シナリオ名を受け取り、そのシナリオの評価動画を撮るレコーダを返す
+VideoRecorderFactory = Callable[[str], VideoRecorder]
+
+
 class GaitEvaluator:
-    """1 つの速度指令で歩行方策を走らせ、追従誤差と転倒を集計する。"""
+    """評価シナリオを順に走らせ、区間ごとの追従誤差と転倒を集計する。"""
 
     def __init__(
-        self, environment: GaitRolloutEnvironment, policy: GaitPolicy, recorder: VideoRecorder | None
+        self,
+        environment: GaitRolloutEnvironment,
+        policy: GaitPolicy,
+        recorder_factory: VideoRecorderFactory | None,
     ) -> None:
-        """評価に使う環境・方策・レコーダを受け取る。
+        """評価に使う環境・方策・レコーダの作り方を受け取る。
 
         Args:
             environment: 評価に使う環境。plan.config と plan.seed で構築しておく。
             policy: 学習済みの歩行方策。
-            recorder: 評価動画を撮る場合のレコーダ。None なら撮らない。
+            recorder_factory: シナリオごとに評価動画を撮る場合のレコーダの作り方。None なら撮らない。
         """
         self._environment = environment
         self._policy = policy
-        self._recorder = recorder
+        self._recorder_factory = recorder_factory
 
-    def run(self, plan: GaitEvaluationPlan) -> GaitTrackingSummary:
-        """plan.num_steps だけ走らせて集計する。
+    def run(self, plan: GaitEvaluationPlan) -> tuple[ScenarioSummary, ...]:
+        """plan のシナリオを順に走らせて集計する。各シナリオは全環境を初期姿勢に戻してから始める。
+
+        追従誤差からは、各区間の始めの過渡（plan.settle_steps）と、転倒した環境の転倒したステップとその後の
+        plan.settle_steps ステップ（立ち直りの過渡）を除く。転倒は除かずに数える。
+
+        Returns:
+            シナリオごとの結果。plan.scenarios と同じ順。
 
         Raises:
             InvalidEvaluationRequestError: 環境の数が plan と異なる。
@@ -173,22 +240,39 @@ class GaitEvaluator:
             raise InvalidEvaluationRequestError(
                 f"環境の数 {self._environment.num_envs} が評価の条件の {plan.config.env.num_envs} と異なる"
             )
-        if self._recorder is None:
-            return self._rollout(plan)
-        self._recorder.start()
+        return tuple(self._run_recorded(scenario, plan.settle_steps) for scenario in plan.scenarios)
+
+    def _run_recorded(self, scenario: PlannedScenario, settle_steps: int) -> ScenarioSummary:
+        if self._recorder_factory is None:
+            return self._run_scenario(scenario, settle_steps)
+        recorder = self._recorder_factory(scenario.name)
+        recorder.start()
         # 評価が例外で止まっても録画のファイルを閉じる。録画の終了自体が失敗した場合はその例外が優先され、
         # 評価の例外は __context__ に残る
         try:
-            return self._rollout(plan)
+            return self._run_scenario(scenario, settle_steps)
         finally:
-            self._recorder.stop()
+            recorder.stop()
 
-    def _rollout(self, plan: GaitEvaluationPlan) -> GaitTrackingSummary:
-        accumulator = GaitTrackingAccumulator(plan.command, self._environment.num_envs, self._environment.device)
-        observation = self._environment.reset_with_command(plan.command)
-        with torch.no_grad():
-            for _ in range(plan.num_steps):
-                result = self._environment.step(self._policy(observation))
-                accumulator.add_step(result.base_lin_vel, result.base_ang_vel, result.fallen)
-                observation = result.observation
-        return accumulator.summarize()
+    def _run_scenario(self, scenario: PlannedScenario, settle_steps: int) -> ScenarioSummary:
+        environment = self._environment
+        fell_in_scenario = torch.zeros(environment.num_envs, dtype=torch.bool, device=environment.device)
+        recovery = FallRecoveryExclusion(environment.num_envs, settle_steps, environment.device)
+        segment_summaries: list[SegmentTrackingSummary] = []
+        observation = environment.reset_with_command(scenario.segments[0].segment.command)
+        for index, planned in enumerate(scenario.segments):
+            if index > 0:
+                observation = environment.switch_command(planned.segment.command)
+            accumulator = SegmentTrackingAccumulator(planned.segment, environment.num_envs, environment.device)
+            with torch.no_grad():
+                for step_index in range(planned.num_steps):
+                    result = environment.step(self._policy(observation))
+                    accumulator.add_falls(result.fallen)
+                    fell_in_scenario |= result.fallen
+                    recovered = recovery.advance(result.fallen)
+                    if step_index >= settle_steps:
+                        accumulator.add_tracking(result.base_lin_vel, result.base_ang_vel, recovered)
+                    observation = result.observation
+            segment_summaries.append(accumulator.summarize())
+        fall_rate = float(fell_in_scenario.sum()) / environment.num_envs
+        return ScenarioSummary(scenario.name, tuple(segment_summaries), fall_rate)

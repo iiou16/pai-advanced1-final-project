@@ -10,6 +10,7 @@ from cooperative_go2.interface_adapters.config_loader import GaitSettings, parse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GAIT_CONFIG_PATH = REPO_ROOT / "configs" / "gait.yaml"
+GAIT_EVAL_CONFIG_PATH = REPO_ROOT / "configs" / "gait_eval.yaml"
 
 Go2StateFactory = Callable[..., Go2State]
 
@@ -18,6 +19,12 @@ Go2StateFactory = Callable[..., Go2State]
 def gait_config_path() -> Path:
     """リポジトリの configs/gait.yaml。値の検査には使わず、読み込めることの確認だけに使う。"""
     return GAIT_CONFIG_PATH
+
+
+@pytest.fixture
+def gait_eval_config_path() -> Path:
+    """リポジトリの configs/gait_eval.yaml（評価シナリオ）。"""
+    return GAIT_EVAL_CONFIG_PATH
 
 
 @pytest.fixture
@@ -58,7 +65,7 @@ SMALL_NUM_ENVS = 2
 
 @pytest.fixture
 def small_gait_settings(gait_config_data: dict) -> GaitSettings:
-    """2 環境・エピソード 5 ステップ（0.1 s）・前進 0.5 m/s 固定の指令にした歩行の設定。"""
+    """2 環境・エピソード 5 ステップ（0.1 s）・前進 0.5 m/s 固定の指令・リセット時のノイズなしにした歩行の設定。"""
     gait_config_data["env"]["num_envs"] = SMALL_NUM_ENVS
     gait_config_data["env"]["control_dt_s"] = 0.02
     gait_config_data["env"]["episode_length_s"] = 0.1
@@ -66,6 +73,9 @@ def small_gait_settings(gait_config_data: dict) -> GaitSettings:
     gait_config_data["command"]["lin_vel_x_mps"] = {"low": 0.5, "high": 0.5}
     gait_config_data["command"]["lin_vel_y_mps"] = {"low": 0.0, "high": 0.0}
     gait_config_data["command"]["yaw_rate_radps"] = {"low": 0.0, "high": 0.0}
+    gait_config_data["command"]["zero_lin_vel_probability"] = 0.0
+    gait_config_data["command"]["zero_yaw_rate_probability"] = 0.0
+    gait_config_data["env"]["reset_joint_pos_noise_rad"] = 0.0
     return parse_gait_settings(gait_config_data)
 
 
@@ -83,6 +93,7 @@ class FakeGaitSimulation:
         self.next_diverged = torch.zeros(num_envs, dtype=torch.bool)
         self.applied_targets: list[torch.Tensor] = []
         self.reset_masks: list[torch.Tensor] = []
+        self.reset_dof_pos: list[torch.Tensor] = []
         self.num_steps = 0
 
     def apply_joint_targets(self, joint_targets: torch.Tensor) -> None:
@@ -97,8 +108,9 @@ class FakeGaitSimulation:
     def diverged_mask(self) -> torch.Tensor:
         return self.next_diverged
 
-    def reset(self, mask: torch.Tensor) -> None:
+    def reset(self, mask: torch.Tensor, dof_pos: torch.Tensor) -> None:
         self.reset_masks.append(mask.clone())
+        self.reset_dof_pos.append(dof_pos.clone())
 
 
 @pytest.fixture
