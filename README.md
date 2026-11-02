@@ -29,7 +29,7 @@ Genesis を GPU で動かすシェルでは、毎回 `source scripts/setup/env.s
 
 ## 歩行方策の学習と評価
 
-Go2 の歩行方策（速度指令 `vx, vy, yaw_rate` → 12 関節の目標位置）を PPO で学習する。設定は `configs/gait.yaml` にまとめ、読み込み時にキーの過不足・型・値の範囲を検証する。
+Go2 の歩行方策（速度指令 `vx, vy, yaw_rate` → 12 関節の目標位置）を PPO で学習する。設定は `configs/gait.yaml` にまとめ、読み込み時にキーの過不足・型・値の範囲を検証する。コマンドはリポジトリのルートで実行する。
 
 ```bash
 source scripts/setup/env.sh
@@ -45,8 +45,9 @@ uv run --frozen go2-evaluate-gait --run-dir outputs/gait/gait-baseline --checkpo
 
 - 評価のシードは学習のシード（`training.seed`）と別の値にする。同じ値を指定するとエラーで止まる。
 - 評価の時間はエピソードの長さ（`env.episode_length_s`）以内にする。
-- 現状の評価は決定的で、全環境が同じ初期状態から始まるため、シードや環境数を変えても結果は変わらない。
-- 学習ログ（TensorBoard）には、報酬の項ごとの 1 秒あたりの値と、エピソードの終了理由（時間切れ・転倒・物理計算の発散）の割合が出る。
+- 現状の評価は決定的で、全環境が同じ初期状態から始まる。そのため追従誤差の平均と転倒率（`fall_rate`）は、シードや環境数を変えても変わらない（`num_falls` は環境数に比例する）。
+- 学習ログは `uv run --frozen tensorboard --logdir outputs/gait` で見る。報酬の項ごとの 1 秒あたりの値（`rew_*`）と、エピソードの終了理由（時間切れ・転倒・物理計算の発散）の割合（`termination_*`）が出る。どちらも、1 反復の中でエピソードが終わったステップごとの値を単純に平均したもの。
+- シーンの構築や学習の途中で失敗した場合も出力先は残る。同じ `--run-name` では再実行できないので、出力先を削除するか別の名前を使う。
 
 ## テスト
 
@@ -59,4 +60,4 @@ uv run --frozen pytest
 | 対象 | 出典 | ライセンス | 本リポジトリでの扱い |
 |---|---|---|---|
 | Go2 の歩行学習の環境・報酬・PPO の設定 | Genesis 公式の例 `examples/locomotion/`（[genesis-world](https://github.com/Genesis-Embodied-AI/genesis-world) v1.4.5） | Apache-2.0 | コードは複製せず、観測・報酬の構成と初期値を参考に `src/cooperative_go2/` で実装した |
-| Go2 の URDF・平面の URDF | genesis-world パッケージ同梱のアセット | 同梱物に個別の表記なし（原典は提出前に確認する） | パッケージから実行時に読み込む。本リポジトリには含めない |
+| Go2 の URDF・平面の URDF | genesis-world パッケージ同梱のアセット | 同梱物に個別の表記なし（原典のライセンスは未確認） | パッケージから実行時に読み込む。本リポジトリには含めない |

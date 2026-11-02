@@ -3,7 +3,7 @@
 # すべてのキーが必須。読み込み時に過不足・型・値の範囲を検証する。
 
 env:
-  # 並列環境の数。RTX 2080 Ti（11 GB）で 4096 環境の VRAM の増分は約 2.0 GB、1 反復の時間は 64 環境と同程度だった
+  # 並列環境の数（公式の例と同じ）。RTX 2080 Ti（11 GB）の VRAM に収まる
   num_envs: 4096
   # 方策の周期 50 Hz（実機の Go2 の制御周期）
   control_dt_s: 0.02
@@ -15,8 +15,8 @@ env:
   simulate_action_latency: true
   termination_roll_deg: 10.0
   termination_pitch_deg: 10.0
-  # 平面上の 1 台の歩行では衝突候補が 20 を超えない。超えた環境は例外ではなく発散（termination_sim_diverged）として
-  # 終了するので、箱などを足すシーンでは設定し直し、学習ログの発散の割合を確認する
+  # 平面上の 1 台の歩行では衝突候補が 20 を超えない。超えると学習・評価を止める（終了コード 4）ので、
+  # 箱などを足すシーンでは設定し直す
   max_collision_pairs: 20
 
 robot:
@@ -80,7 +80,7 @@ rsl_rl:
   critic_hidden_dims: [512, 256, 128]
   activation: elu
   init_noise_std: 1.0
-  # チェックポイントを保存する反復の間隔
+  # チェックポイントを保存する反復の間隔。反復番号（0 から数える）がこの倍数のときと、最後の反復で保存する
   save_interval: 100
 
 training:
