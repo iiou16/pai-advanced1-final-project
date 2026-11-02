@@ -53,6 +53,24 @@ def test_each_single_condition_maps_to_its_reason() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("flags_row", "expected"),
+    [
+        ((True, True, True, True, True), PushTerminationReason.SIM_DIVERGED),
+        ((True, True, True, True, False), PushTerminationReason.OUT_OF_BOUNDS),
+        ((True, True, True, False, False), PushTerminationReason.FALL),
+        ((True, True, False, False, False), PushTerminationReason.SUCCESS),
+    ],
+)
+def test_reason_priority_is_diverged_then_out_of_bounds_then_fall_then_success(
+    flags_row: tuple[bool, bool, bool, bool, bool], expected: PushTerminationReason
+) -> None:
+    # 優先度の高い条件から 1 つずつ外していき、残った中で最も優先度の高い理由が選ばれることを確かめる
+    reasons = classify_push_terminations(_flags(flags_row))
+
+    assert reasons.tolist() == [expected]
+
+
 def test_success_at_time_out_counts_as_success() -> None:
     reasons = classify_push_terminations(_flags((True, True, False, False, False)))
 

@@ -5,7 +5,7 @@
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 # 時間の比を切り上げるときの丸め桁数。0.1 のような 2 進で割り切れない周期の丸め誤差で 1 ステップ多く数えないようにする
 _RATIO_ROUND_DIGITS = 9
@@ -15,7 +15,14 @@ class InvalidPushConfigError(ValueError):
     """箱押しの設定値が不変条件（正の値、値域など）を満たさないことを表す。"""
 
 
+# NaN は大小の比較がすべて偽になり「0 以下か」の検査をすり抜けるため、有限かどうかを先に調べる
+def _require_finite(name: str, value: float) -> None:
+    if not math.isfinite(value):
+        raise InvalidPushConfigError(f"{name} は有限の値が必要: {value}")
+
+
 def _require_positive(name: str, value: float) -> None:
+    _require_finite(name, value)
     if value <= 0:
         raise InvalidPushConfigError(f"{name} は正の値が必要: {value}")
 
@@ -108,6 +115,10 @@ class PushRewardScales:
     robot_fall: float
     unsafe_collision: float
     control_effort: float
+
+    def __post_init__(self) -> None:
+        for field in fields(self):
+            _require_finite(f"reward.scales.{field.name}", getattr(self, field.name))
 
 
 @dataclass(frozen=True)

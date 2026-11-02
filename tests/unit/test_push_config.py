@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from cooperative_go2.entities.push_config import (
@@ -72,3 +74,31 @@ def test_reward_config_accepts_cosine_bounds(min_cos: float) -> None:
 def test_reward_config_rejects_cosine_outside_range(min_cos: float) -> None:
     with pytest.raises(InvalidPushConfigError, match="reward.intended_face_min_cos"):
         PushRewardConfig(intended_face_min_cos=min_cos, scales=_reward_scales())
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf])
+def test_positive_values_reject_nan_and_infinity(value: float) -> None:
+    # NaN は「0 以下か」の比較をすり抜けるため、有限かどうかで弾く
+    with pytest.raises(InvalidPushConfigError, match="success.hold_time_s"):
+        PushSuccessConfig(goal_radius_m=0.3, hold_time_s=value)
+
+
+def test_required_hold_steps_rejects_nan_control_period() -> None:
+    success = PushSuccessConfig(goal_radius_m=0.3, hold_time_s=1.0)
+
+    with pytest.raises(InvalidPushConfigError, match="control_dt_s"):
+        success.required_hold_steps(control_dt_s=math.nan)
+
+
+@pytest.mark.parametrize("value", [math.nan, -math.inf])
+def test_reward_scales_reject_non_finite_value(value: float) -> None:
+    scales = dict(_reward_scales().__dict__, robot_fall=value)
+
+    with pytest.raises(InvalidPushConfigError, match="reward.scales.robot_fall"):
+        PushRewardScales(**scales)
+
+
+def test_reward_scales_accept_negative_and_zero_values() -> None:
+    scales = dict(_reward_scales().__dict__, robot_fall=-5.0, control_effort=0.0)
+
+    assert PushRewardScales(**scales).robot_fall == -5.0
