@@ -25,7 +25,7 @@ class GaitPolicy(Protocol):
 
 
 class GaitController:
-    """歩行方策 π_gait(o_gait, v_cmd) → q_target[12] を、学習時と同じ前処理・後処理で包んだ推論器。
+    """自己受容の状態と速度指令から 12 関節の目標角を出す推論器。学習時と同じ前処理・後処理で方策を包む。
 
     - 観測は GAIT_OBSERVATION_LAYOUT の順（角速度・重力方向・速度指令・関節角の差・関節角速度・前回の行動）で、
       学習時の設定の係数で正規化する。

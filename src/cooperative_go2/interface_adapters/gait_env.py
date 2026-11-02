@@ -86,6 +86,9 @@ class GaitStepOutcome:
 class Go2GaitEnv:
     """Go2 の歩行を学習・評価する並列環境。
 
+    リセットでは、胴体を初期位置に置き、関節角を既定姿勢に一様ノイズ（env.reset_joint_pos_noise_rad）を足した値にして
+    静止させる。以下の「初期姿勢」はこの状態を指す。
+
     num_envs・num_actions・max_episode_length・episode_length_buf・device・cfg は RSL-RL の VecEnv の契約で、
     OnPolicyRunner が episode_length_buf を外から代入して各環境のエピソードの進みをばらす。
     """
