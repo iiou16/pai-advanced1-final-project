@@ -46,7 +46,7 @@ curl -fL -o "${apt_source_deb}" \
 sudo dpkg -i "${apt_source_deb}"
 
 sudo apt update
-# desktop は RViz と demo_nodes を含み、P0 の pub/sub 疎通確認に使う
+# desktop は RViz と demo_nodes を含み、scripts/p0_env_check/ros2_smoke.sh の Topic / Action 疎通確認に使う
 sudo apt install -y "ros-${ROS_DISTRO_NAME}-desktop" ros-dev-tools
 
 echo "完了。確認: source /opt/ros/${ROS_DISTRO_NAME}/setup.bash && ros2 doctor --report | head"

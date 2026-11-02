@@ -73,15 +73,16 @@ git clone --depth 1 --branch v1.4.5 https://github.com/Genesis-Embodied-AI/genes
 
 ## 5. 動作確認
 
-セットアップ後、次のスクリプトで環境を確認する。いずれも最後に `RESULT: PASS` を出力し、失敗時は非ゼロで終了する。
+セットアップ後、`scripts/p0_env_check/` のスクリプトで環境を確認する（`p0` は開発の最初の段階＝Phase 0 を表し、学習や ROS 2 連携の実装に入る前に行う確認であることを示す）。
+いずれもリポジトリのルートで実行し、最後に `RESULT: PASS` を出力する。失敗時は非ゼロで終了する。
 
 | 確認内容 | コマンド |
 |---|---|
-| PyTorch の CUDA 演算 | `uv run --frozen python scripts/p0/torch_cuda_smoke.py` |
-| Genesis の剛体シミュレーション（GPU） | `uv run --frozen python scripts/p0/genesis_rigid_smoke.py` |
-| オフスクリーン録画（`outputs/p0/offscreen_record.mp4` を出力） | `uv run --frozen python scripts/p0/genesis_offscreen_record.py` |
-| 対話 Viewer（WSLg。ウィンドウに箱の落下が表示されることを目視する） | `uv run --frozen python scripts/p0/genesis_viewer_check.py` |
-| ROS 2 の Topic / Action と、venv からの rclpy・torch の同時利用 | `bash scripts/p0/ros2_smoke.sh` |
+| PyTorch の CUDA 演算 | `uv run --frozen python scripts/p0_env_check/torch_cuda_smoke.py` |
+| Genesis の剛体シミュレーション（GPU） | `uv run --frozen python scripts/p0_env_check/genesis_rigid_smoke.py` |
+| オフスクリーン録画（`outputs/p0_env_check/offscreen_record.mp4` を出力） | `uv run --frozen python scripts/p0_env_check/genesis_offscreen_record.py` |
+| 対話 Viewer（WSLg。ウィンドウに箱の落下が表示されることを目視する） | `uv run --frozen python scripts/p0_env_check/genesis_viewer_check.py` |
+| ROS 2 の Topic / Action と、venv からの rclpy・torch の同時利用 | `bash scripts/p0_env_check/ros2_smoke.sh` |
 
 Genesis を使うスクリプトは、事前に `source scripts/setup/env.sh` を実行したシェルで動かす。
 初回はカーネルのコンパイルに数分かかる。

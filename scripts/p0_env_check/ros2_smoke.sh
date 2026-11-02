@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ROS 2 Jazzy の Topic / Action 疎通と、学習用 venv から rclpy と torch を同時に import できることを確認する。
 # 前提: scripts/setup/install_ros2_jazzy.sh で ros-jazzy-desktop を導入済み。
-# 実行: bash scripts/p0/ros2_smoke.sh （リポジトリのルートで）
+# 実行: bash scripts/p0_env_check/ros2_smoke.sh （リポジトリのルートで）
 set -eo pipefail
 
 readonly ROS_SETUP="/opt/ros/jazzy/setup.bash"
@@ -59,7 +59,7 @@ assert restored.pose.covariance[0] == 1.5, 'Odometry の往復変換で値が一
 joint_state = JointState(name=['j0'], position=[0.1])
 assert deserialize_message(serialize_message(joint_state), JointState).position[0] == 0.1
 
-rclpy.init(); node = rclpy.create_node('p0_import_check'); node.destroy_node(); rclpy.shutdown()
+rclpy.init(); node = rclpy.create_node('env_check_import'); node.destroy_node(); rclpy.shutdown()
 assert torch.cuda.is_available(), 'torch から CUDA が見えない'
 print('  PASS: rclpy msg 変換 + torch', torch.__version__, '/ numpy', numpy.__version__)
 "

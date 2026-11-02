@@ -1,14 +1,14 @@
 """Genesis のオフスクリーンカメラで mp4 を録画できることを確かめるスモークテスト.
 
 Viewer (WSLg) に依存しない評価動画の取得経路を検証する。
-出力: outputs/p0/offscreen_record.mp4
+出力: outputs/p0_env_check/offscreen_record.mp4
 """
 
 from pathlib import Path
 
 import genesis as gs
 
-OUTPUT_PATH = Path("outputs/p0/offscreen_record.mp4")
+OUTPUT_PATH = Path("outputs/p0_env_check/offscreen_record.mp4")
 SIM_DT_S = 0.01
 SIM_STEPS = 150
 VIDEO_FPS = int(round(1 / SIM_DT_S))  # 1 step = 1 フレームで実時間再生にする
