@@ -6,6 +6,7 @@ set -eo pipefail
 
 readonly ROS_SETUP="/opt/ros/jazzy/setup.bash"
 readonly WAIT_TIMEOUT_S=20
+readonly STOP_TIMEOUT_S=10
 readonly VENV_PYTHON="$(git rev-parse --show-toplevel)/.venv/bin/python"
 
 if [[ ! -f "${ROS_SETUP}" ]]; then
@@ -19,24 +20,47 @@ set -u
 # 他の ROS 2 プロセスと混線しないよう、このテスト専用のドメインを使う
 export ROS_DOMAIN_ID=42
 
-background_pids=()
+# 前回の実行で残ったノードが応答すると、今回起動したノードが失敗しても PASS してしまうため先に止める
+leftover_nodes="$(ros2 node list --no-daemon)"
+if [[ -n "${leftover_nodes}" ]]; then
+  echo "ERROR: ROS_DOMAIN_ID=${ROS_DOMAIN_ID} にノードが残っている。停止してから再実行する:" >&2
+  echo "${leftover_nodes}" >&2
+  exit 1
+fi
+
+# ros2 run は子プロセスとしてノードを起動し、SIGTERM を子へ転送しない。
+# setsid で別のプロセスグループにし、グループごと停止する。
+# rclpy ノードは SIGTERM から終了まで数秒かかるため、終了を待ってから抜ける（直後の再実行で残存と誤検知しない）
+background_pgids=()
 cleanup() {
-  for pid in "${background_pids[@]}"; do
-    kill "${pid}" 2>/dev/null || true  # 既に終了済みのプロセスは停止不要
+  local pgid deadline
+  for pgid in "${background_pgids[@]}"; do
+    kill -TERM -- "-${pgid}" 2>/dev/null || true  # 既に終了済みのプロセスは停止不要
+  done
+  deadline=$((SECONDS + STOP_TIMEOUT_S))
+  for pgid in "${background_pgids[@]}"; do
+    while kill -0 -- "-${pgid}" 2>/dev/null; do
+      if (( SECONDS >= deadline )); then
+        echo "WARNING: プロセスグループ ${pgid} が ${STOP_TIMEOUT_S}s で終了しないため SIGKILL する" >&2
+        kill -KILL -- "-${pgid}" 2>/dev/null || true  # 判定直後に終了した場合は停止不要
+        break
+      fi
+      sleep 0.2
+    done
   done
 }
 trap cleanup EXIT
 
 echo "[1/3] Topic: demo_nodes_py talker -> topic echo"
-ros2 run demo_nodes_py talker >/dev/null 2>&1 &
-background_pids+=($!)
+setsid ros2 run demo_nodes_py talker >/dev/null 2>&1 &
+background_pgids+=($!)
 topic_output="$(timeout "${WAIT_TIMEOUT_S}" ros2 topic echo --once /chatter std_msgs/msg/String)"
 echo "${topic_output}" | grep -q "Hello World" || { echo "ERROR: /chatter を受信できない" >&2; exit 1; }
 echo "  PASS: ${topic_output//$'\n'/ }"
 
 echo "[2/3] Action: fibonacci_action_server <- send_goal"
-ros2 run action_tutorials_py fibonacci_action_server >/dev/null 2>&1 &
-background_pids+=($!)
+setsid ros2 run action_tutorials_py fibonacci_action_server >/dev/null 2>&1 &
+background_pgids+=($!)
 action_output="$(timeout "${WAIT_TIMEOUT_S}" ros2 action send_goal /fibonacci \
   action_tutorials_interfaces/action/Fibonacci "{order: 5}")"
 echo "${action_output}" | grep -q "SUCCEEDED" || { echo "ERROR: Action が成功しない" >&2; echo "${action_output}" >&2; exit 1; }
