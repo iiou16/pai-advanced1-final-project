@@ -6,6 +6,12 @@ CLAUDE.local.md
 # --- 配布資料・提出用 PDF（講座資料は再配布しない／レポートは omnicampus へ直接提出） ---
 *.pdf
 
+# --- 開発計画書（手元の作業用資料。公開リポジトリには含めない） ---
+docs/task/plans/
+
+# --- 作業経過のログ（手元の記録。公開リポジトリには含めない） ---
+docs/worklog/
+
 # --- Python ---
 __pycache__/
 *.py[cod]
@@ -37,6 +43,21 @@ outputs/
 *.gif
 MUJOCO_LOG.TXT
 *.log
+
+# --- 強化学習の実行ログ（Genesis/RSL-RL はリポジトリのルートで実行すると logs/<exp>/ に設定 pickle と TensorBoard を出力する） ---
+# src/ 配下に logs / runs という名前のパッケージやデータを置いても巻き込まないよう、ルート直下に限定する
+/logs/
+/runs/
+# TensorBoard のイベントファイルはソースとして置くことが無いため、出力先を問わず除外する
+events.out.tfevents.*
+
+# --- ROS 2 のビルド成果物と rosbag2 の生データ ---
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+rosbag2_*/
+*.db3
+*.mcap
 
 # --- OS / エディタ ---
 .DS_Store

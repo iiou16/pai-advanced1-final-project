@@ -1,0 +1,29 @@
+[project]
+name = "cooperative-go2"
+version = "0.1.0"
+description = "Genesis と ROS 2 で四足歩行ロボット Go2 が箱を押して通路を開ける強化学習プロジェクト"
+readme = "README.md"
+# ROS 2 Jazzy の rclpy が apt のシステム Python 3.12 向けにビルドされるため、同じ版に揃える
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # 録画した評価動画を読み戻して検証する
+    "av",
+    # Genesis の公式 examples/locomotion はこの版のタグと組で使うため完全一致で固定する
+    "genesis-world==1.4.5",
+    "rsl-rl-lib>=5.0.0,<6",
+    "tensorboard",
+    "torch==2.15.0",
+]
+
+[tool.uv]
+# uv 管理の Python を落とさず、rclpy と共存できるシステム Python を使う
+python-preference = "only-system"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu132" }
+
+# RTX 2080 Ti (sm_75) を含む CUDA 13.2 ビルド。torch 以外はこの index から取得しない
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
