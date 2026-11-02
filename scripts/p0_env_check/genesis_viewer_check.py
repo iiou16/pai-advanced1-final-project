@@ -14,7 +14,7 @@ BOX_DROP_HEIGHT_M = 1.0
 
 def main() -> None:
     """Viewer 付きでシーンを構築し、一定ステップ描画して終了する。"""
-    gs.init(backend=gs.gpu, logging_level="warning")
+    gs.init(backend=gs.cuda, logging_level="warning")
     scene = gs.Scene(
         sim_options=gs.options.SimOptions(dt=SIM_DT_S),
         viewer_options=gs.options.ViewerOptions(

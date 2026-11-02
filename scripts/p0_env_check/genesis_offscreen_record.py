@@ -26,7 +26,7 @@ class RecordingError(RuntimeError):
 
 def main() -> None:
     """箱の落下を録画し、mp4 が生成されたことを検証する。"""
-    gs.init(backend=gs.gpu, logging_level="warning")
+    gs.init(backend=gs.cuda, logging_level="warning")
     scene = gs.Scene(
         sim_options=gs.options.SimOptions(dt=SIM_DT_S),
         renderer=gs.renderers.Rasterizer(),

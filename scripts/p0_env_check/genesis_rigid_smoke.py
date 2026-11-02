@@ -1,6 +1,7 @@
-"""Genesis の GPU バックエンドで剛体シーンを step できることを確かめるスモークテスト.
+"""Genesis の CUDA バックエンドで剛体シーンを step できることを確かめるスモークテスト.
 
 平面上に箱を落とし、重力と接触で床に静止するかを検証する。
+CUDA が使えない場合は CPU に切り替えず、Genesis の初期化で例外を送出する。
 失敗時は例外を送出して非ゼロ終了する。
 """
 
@@ -35,8 +36,8 @@ def build_scene() -> tuple[gs.Scene, object]:
 
 
 def main() -> None:
-    """GPU 上で箱を落下させ、床に静止した高さを検証する。"""
-    gs.init(backend=gs.gpu, logging_level="warning")
+    """CUDA 上で箱を落下させ、床に静止した高さを検証する。"""
+    gs.init(backend=gs.cuda, logging_level="warning")
     scene, box = build_scene()
 
     started = time.perf_counter()
@@ -46,7 +47,7 @@ def main() -> None:
 
     final_height_m = float(box.get_pos()[2])
     expected_height_m = BOX_SIZE_M / 2
-    print(f"backend=gpu steps={SIM_STEPS} wall_time_s={wall_time_s:.3f}")
+    print(f"backend={gs.backend.name} steps={SIM_STEPS} wall_time_s={wall_time_s:.3f}")
     print(f"box z: final={final_height_m:.4f} expected={expected_height_m:.4f}")
     if abs(final_height_m - expected_height_m) > REST_HEIGHT_TOLERANCE_M:
         raise RigidSmokeError(
