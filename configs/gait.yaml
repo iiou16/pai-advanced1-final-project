@@ -1,0 +1,89 @@
+# Go2 歩行方策（シーン S0_flat）の学習設定。
+# 値は Genesis 公式の歩行学習の例（v1.4.5 の examples/locomotion）の初期値にそろえている。
+# すべてのキーが必須。読み込み時に過不足・型・値の範囲を検証する。
+
+env:
+  # 並列環境の数（公式の例と同じ）。RTX 2080 Ti（11 GB）の VRAM に収まる
+  num_envs: 4096
+  # 方策の周期 50 Hz（実機の Go2 の制御周期）
+  control_dt_s: 0.02
+  substeps: 2
+  episode_length_s: 20.0
+  action_scale: 0.25
+  clip_actions: 100.0
+  # 実機の 1 制御周期の遅延を模擬する
+  simulate_action_latency: true
+  termination_roll_deg: 10.0
+  termination_pitch_deg: 10.0
+  # 平面上の 1 台の歩行では衝突候補が 20 を超えない。超えると学習・評価を止める（終了コード 4）ので、
+  # 箱などを足すシーンでは設定し直す
+  max_collision_pairs: 20
+
+robot:
+  default_joint_angles_rad:
+    FR_hip_joint: 0.0
+    FR_thigh_joint: 0.8
+    FR_calf_joint: -1.5
+    FL_hip_joint: 0.0
+    FL_thigh_joint: 0.8
+    FL_calf_joint: -1.5
+    RR_hip_joint: 0.0
+    RR_thigh_joint: 1.0
+    RR_calf_joint: -1.5
+    RL_hip_joint: 0.0
+    RL_thigh_joint: 1.0
+    RL_calf_joint: -1.5
+  kp: 20.0
+  kd: 0.5
+  base_init_pos_m: [0.0, 0.0, 0.42]
+  base_init_quat_wxyz: [1.0, 0.0, 0.0, 0.0]
+
+command:
+  # 公式の初期値は前進 0.5 m/s 固定。停止・旋回への拡張は別の設定で行う
+  lin_vel_x_mps: {low: 0.5, high: 0.5}
+  lin_vel_y_mps: {low: 0.0, high: 0.0}
+  yaw_rate_radps: {low: 0.0, high: 0.0}
+  resampling_time_s: 4.0
+
+observation:
+  lin_vel: 2.0
+  ang_vel: 0.25
+  dof_pos: 1.0
+  dof_vel: 0.05
+
+reward:
+  tracking_sigma: 0.25
+  base_height_target_m: 0.3
+  scales:
+    tracking_lin_vel: 1.0
+    tracking_ang_vel: 0.2
+    lin_vel_z: -1.0
+    base_height: -50.0
+    action_rate: -0.005
+    similar_to_default: -0.1
+
+rsl_rl:
+  clip_param: 0.2
+  desired_kl: 0.01
+  entropy_coef: 0.01
+  gamma: 0.99
+  lam: 0.95
+  learning_rate: 0.001
+  max_grad_norm: 1.0
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  schedule: adaptive
+  use_clipped_value_loss: true
+  value_loss_coef: 1.0
+  num_steps_per_env: 24
+  actor_hidden_dims: [512, 256, 128]
+  critic_hidden_dims: [512, 256, 128]
+  activation: elu
+  init_noise_std: 1.0
+  # チェックポイントを保存する反復の間隔。反復番号（0 から数える）がこの倍数のときと、最後の反復で保存する
+  save_interval: 100
+
+training:
+  # 学習用のシード。評価には別のシードを使う
+  seed: 1
+  max_iterations: 101
