@@ -1,0 +1,116 @@
+"""1 台の箱押し（シーン S1_push）の高レベル方策に使う設定の値オブジェクト。
+
+既定値はここに持たず、設定ファイル（configs/push_single.yaml）にすべての値を書く。
+各クラスは生成時に値の不変条件を検証し、違反すれば InvalidPushConfigError を送出する。
+"""
+
+import math
+from dataclasses import dataclass
+
+# 時間の比を切り上げるときの丸め桁数。0.1 のような 2 進で割り切れない周期の丸め誤差で 1 ステップ多く数えないようにする
+_RATIO_ROUND_DIGITS = 9
+
+
+class InvalidPushConfigError(ValueError):
+    """箱押しの設定値が不変条件（正の値、値域など）を満たさないことを表す。"""
+
+
+def _require_positive(name: str, value: float) -> None:
+    if value <= 0:
+        raise InvalidPushConfigError(f"{name} は正の値が必要: {value}")
+
+
+@dataclass(frozen=True)
+class PushSuccessConfig:
+    """成功判定の条件。箱の中心が目標領域に入り、その状態を hold_time_s 続けたら成功とする。
+
+    Attributes:
+        goal_radius_m: 目標領域（目標位置を中心とする円）の半径 [m]。正の値。
+        hold_time_s: 目標領域に入った状態を続ける時間 [s]。正の値。
+    """
+
+    goal_radius_m: float
+    hold_time_s: float
+
+    def __post_init__(self) -> None:
+        _require_positive("success.goal_radius_m", self.goal_radius_m)
+        _require_positive("success.hold_time_s", self.hold_time_s)
+
+    def required_hold_steps(self, control_dt_s: float) -> int:
+        """hold_time_s を、高レベル方策の制御ステップ数に換算して返す（端数は切り上げ）。
+
+        Args:
+            control_dt_s: 高レベル方策の制御周期 [s]。正の値でなければ InvalidPushConfigError を送出する。
+        """
+        _require_positive("control_dt_s", control_dt_s)
+        return math.ceil(round(self.hold_time_s / control_dt_s, _RATIO_ROUND_DIGITS))
+
+
+@dataclass(frozen=True)
+class PushArenaConfig:
+    """シーンの有効範囲。環境の原点を中心とする長方形で、外に出た箱やロボットはシーン外への離脱とみなす。
+
+    Attributes:
+        half_extent_x_m: x 方向の半幅 [m]。正の値。
+        half_extent_y_m: y 方向の半幅 [m]。正の値。
+    """
+
+    half_extent_x_m: float
+    half_extent_y_m: float
+
+    def __post_init__(self) -> None:
+        _require_positive("arena.half_extent_x_m", self.half_extent_x_m)
+        _require_positive("arena.half_extent_y_m", self.half_extent_y_m)
+
+
+@dataclass(frozen=True)
+class PushObservationScales:
+    """高レベル方策の観測の各成分に掛ける正規化係数。
+
+    Attributes:
+        position: 相対位置 [m] に掛ける係数。
+        lin_vel: 速度と速度指令の並進成分 [m/s] に掛ける係数。
+        ang_vel: ヨー角速度と速度指令の旋回成分 [rad/s] に掛ける係数。
+    """
+
+    position: float
+    lin_vel: float
+    ang_vel: float
+
+    def __post_init__(self) -> None:
+        _require_positive("observation.position", self.position)
+        _require_positive("observation.lin_vel", self.lin_vel)
+        _require_positive("observation.ang_vel", self.ang_vel)
+
+
+@dataclass(frozen=True)
+class PushRewardScales:
+    """報酬の各項の係数。正は報酬、負は減点。0 ならその項を使わない。フィールド名は PushRewardTerms と一致させる。"""
+
+    box_progress: float
+    success: float
+    intended_face_contact: float
+    box_rotation: float
+    robot_fall: float
+    unsafe_collision: float
+    control_effort: float
+
+
+@dataclass(frozen=True)
+class PushRewardConfig:
+    """報酬の計算に使うパラメータ。
+
+    Attributes:
+        intended_face_min_cos: 「意図した面を押している」とみなす、ロボット→箱の向きと箱→目標の向きの
+            なす角の余弦の下限。-1 以上 1 以下。1 に近いほど、箱の真後ろから押す場合だけを認める。
+        scales: 各項の係数。
+    """
+
+    intended_face_min_cos: float
+    scales: PushRewardScales
+
+    def __post_init__(self) -> None:
+        if not -1.0 <= self.intended_face_min_cos <= 1.0:
+            raise InvalidPushConfigError(
+                f"reward.intended_face_min_cos は -1 以上 1 以下が必要: {self.intended_face_min_cos}"
+            )
