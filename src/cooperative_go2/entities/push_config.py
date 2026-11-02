@@ -64,6 +64,20 @@ class PushArenaConfig:
 
 
 @dataclass(frozen=True)
+class PushDivergenceConfig:
+    """物理計算の発散とみなす条件。値が NaN・無限大になった環境のほか、速さが上限を超えた環境も発散とみなす。
+
+    Attributes:
+        max_speed_mps: ロボットや箱の並進の速さの上限 [m/s]。歩行や押す動作では起こりえない大きさにする。正の値。
+    """
+
+    max_speed_mps: float
+
+    def __post_init__(self) -> None:
+        _require_positive("divergence.max_speed_mps", self.max_speed_mps)
+
+
+@dataclass(frozen=True)
 class PushObservationScales:
     """高レベル方策の観測の各成分に掛ける正規化係数。
 

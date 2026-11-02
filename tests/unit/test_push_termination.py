@@ -1,12 +1,18 @@
+import math
+
+import pytest
 import torch
 
-from cooperative_go2.entities.push_config import PushArenaConfig
+from cooperative_go2.entities.push_config import PushArenaConfig, PushDivergenceConfig
 from cooperative_go2.entities.push_termination import (
     PushTerminationFlags,
     PushTerminationReason,
     classify_push_terminations,
+    detect_divergence,
     is_outside_arena,
 )
+
+DIVERGENCE = PushDivergenceConfig(max_speed_mps=10.0)
 
 
 def test_arena_boundary_counts_as_inside() -> None:
@@ -63,3 +69,36 @@ def test_failure_in_same_step_overrides_success() -> None:
         PushTerminationReason.OUT_OF_BOUNDS,
         PushTerminationReason.SIM_DIVERGED,
     ]
+
+
+def test_divergence_is_detected_from_non_finite_state() -> None:
+    positions = torch.tensor([[0.0, 0.0, 0.3], [math.nan, 0.0, 0.3], [0.0, math.inf, 0.3]])
+    yaws = torch.tensor([0.0, 0.0, 0.0])
+    velocities = torch.zeros(3, 3)
+
+    diverged = detect_divergence((positions, yaws), (velocities,), DIVERGENCE)
+
+    assert diverged.tolist() == [False, True, True]
+
+
+def test_divergence_is_detected_from_non_finite_velocity() -> None:
+    velocities = torch.tensor([[0.0, 0.0], [math.nan, 0.0]])
+
+    diverged = detect_divergence((), (velocities,), DIVERGENCE)
+
+    # NaN の速さは上限との比較では見つからないため、有限かどうかでも調べる
+    assert diverged.tolist() == [False, True]
+
+
+def test_speed_above_limit_counts_as_divergence_and_limit_itself_does_not() -> None:
+    robot_velocity = torch.tensor([[10.0, 0.0], [0.0, 0.0], [6.0, 8.0]])
+    box_velocity = torch.tensor([[0.0, 0.0], [0.0, -10.01], [0.0, 0.0]])
+
+    diverged = detect_divergence((), (robot_velocity, box_velocity), DIVERGENCE)
+
+    assert diverged.tolist() == [False, True, False]
+
+
+def test_divergence_requires_at_least_one_velocity() -> None:
+    with pytest.raises(ValueError, match="velocities_mps"):
+        detect_divergence((torch.zeros(2, 3),), (), DIVERGENCE)

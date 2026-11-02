@@ -1,11 +1,12 @@
 """1 台の箱押しのエピソードの終了理由の判定。"""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import IntEnum
 
 import torch
 
-from cooperative_go2.entities.push_config import PushArenaConfig
+from cooperative_go2.entities.push_config import PushArenaConfig, PushDivergenceConfig
 
 
 class PushTerminationReason(IntEnum):
@@ -48,6 +49,34 @@ def is_outside_arena(position_xy_m: torch.Tensor, arena: PushArenaConfig) -> tor
     outside_x = torch.abs(position_xy_m[:, 0]) > arena.half_extent_x_m
     outside_y = torch.abs(position_xy_m[:, 1]) > arena.half_extent_y_m
     return outside_x | outside_y
+
+
+def detect_divergence(
+    state_values: Sequence[torch.Tensor], velocities_mps: Sequence[torch.Tensor], config: PushDivergenceConfig
+) -> torch.Tensor:
+    """物理計算が発散した環境のマスク (num_envs,) を返す。
+
+    いずれかの値に NaN・無限大を含むか、いずれかの速度の大きさが上限を超えた環境を発散とする。
+    NaN は大小の比較がすべて偽になり、シーン外や転倒の判定をすり抜けるため、ここで明示的に拾う。
+
+    Args:
+        state_values: 有限であるべき状態 (num_envs, ...) の並び。位置・姿勢など。各テンソルの先頭の次元は環境。
+        velocities_mps: 並進速度 (num_envs, 2 または 3) [m/s] の並び。ロボットと箱など。
+            大きさを上限と比べるほか、NaN・無限大も調べる。1 つ以上必要。
+        config: 速さの上限。
+
+    Raises:
+        ValueError: velocities_mps が空。
+    """
+    if not velocities_mps:
+        raise ValueError("velocities_mps が空。発散の判定には速度が 1 つ以上必要")
+    non_finite = torch.zeros(velocities_mps[0].shape[0], dtype=torch.bool, device=velocities_mps[0].device)
+    for values in (*state_values, *velocities_mps):
+        non_finite |= ~torch.isfinite(values.reshape(values.shape[0], -1)).all(dim=1)
+    too_fast = torch.zeros_like(non_finite)
+    for velocity in velocities_mps:
+        too_fast |= torch.linalg.vector_norm(velocity, dim=1) > config.max_speed_mps
+    return non_finite | too_fast
 
 
 def classify_push_terminations(flags: PushTerminationFlags) -> torch.Tensor:
