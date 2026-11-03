@@ -16,7 +16,6 @@
 import argparse
 import dataclasses
 import logging
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -27,6 +26,7 @@ from genesis.utils.geom import default_friction
 from cooperative_go2.entities.push_config import InvalidPushConfigError
 from cooperative_go2.entities.push_trial import PushEpisodeResult, summarize_push_trials
 from cooperative_go2.frameworks.genesis_runtime import init_genesis_on_cpu, init_genesis_on_cuda, make_seeded_generator
+from cooperative_go2.frameworks.git_revision import GitCommitUnavailableError, current_commit_sha
 from cooperative_go2.interface_adapters.config_loader import (
     ConfigValidationError,
     PushSceneSettings,
@@ -54,7 +54,7 @@ from cooperative_go2.interface_adapters.push_evaluation_store import (
     PushEvaluationConditions,
     PushEvaluationOutputExistsError,
 )
-from cooperative_go2.interface_adapters.rsl_rl_gait import CheckpointLoadError, CheckpointNotFoundError
+from cooperative_go2.interface_adapters.rsl_rl_policy import CheckpointLoadError, CheckpointNotFoundError
 from cooperative_go2.use_cases.evaluate_push import EvaluationDidNotFinishError, PushCommandSource, evaluate_push
 from cooperative_go2.use_cases.simulation_errors import SimulationSetupError
 
@@ -77,10 +77,6 @@ EXIT_VIDEO_RECORDING_FAILED = 7
 logger = logging.getLogger(__name__)
 
 
-class GitCommitUnavailableError(RuntimeError):
-    """評価の記録に残すコミットを git から取得できないことを表す。"""
-
-
 class MissingPolicyArgumentsError(ValueError):
     """学習済みの方策を評価するのに、学習の出力先かチェックポイントが指定されていないことを表す。"""
 
@@ -100,16 +96,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--box-mass-kg", type=float, help="シーンの設定の箱の質量 [kg] を置き換える（実験用）")
     parser.add_argument("--video", action="store_true", help="環境 0 を追従した評価動画を撮る")
     return parser.parse_args(argv)
-
-
-def _current_commit_sha() -> str:
-    # 未コミットの変更がある状態で評価したことを記録から見分けられるよう、その場合は末尾に -dirty を付ける
-    try:
-        sha = subprocess.run(["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
-        status = subprocess.run(["git", "status", "--porcelain"], check=True, capture_output=True, text=True).stdout
-    except (OSError, subprocess.CalledProcessError) as error:
-        raise GitCommitUnavailableError(f"コミットを取得できない: {error}") from error
-    return f"{sha}-dirty" if status.strip() else sha
 
 
 def _scene_settings(settings: PushTrainingSettings, box_mass_kg: float | None) -> PushSceneSettings:
@@ -180,7 +166,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         settings = load_push_training_settings(args.config)
         scene = _scene_settings(settings, args.box_mass_kg)
-        commit_sha = _current_commit_sha()
+        commit_sha = current_commit_sha()
     except (FileNotFoundError, ConfigValidationError) as error:
         logger.error("評価の条件が不正: %s", error)
         sys.exit(EXIT_INVALID_INPUT)
