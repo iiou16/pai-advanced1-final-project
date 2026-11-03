@@ -1,4 +1,5 @@
 # 箱を目標領域へ移す作業の依頼。座標はすべて header.frame_id の座標系。
+# header.stamp は作業を始めた時点のシミュレーション時刻。受け手はこの時刻以降の状態から判断する。
 
 # --- goal ---
 std_msgs/Header header
