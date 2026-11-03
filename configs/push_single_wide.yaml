@@ -1,0 +1,109 @@
+# 1 台の箱押し（シーン S1_push）の高レベル方策の学習環境の設定（カリキュラムの第 2 段階: 目標の方向を ±60° に広げる）。
+# 第 1 段階（configs/push_single.yaml）との違いは reset.goal_direction_deg と training だけ。
+# 値は初期値で、規則ベースで押す実験と高レベル方策の学習で調整する。
+# すべてのキーが必須。読み込み時に過不足・型・値の範囲を検証し、歩行方策を読み込んだ後に、
+# 歩行方策の学習時の設定（gait_policy.run_dir の gait.yaml）と矛盾しないことを確かめる。
+
+# シーン（箱の寸法・質量・摩擦、Genesis の接触の設定）
+scene_config: configs/scenes/s1_push.yaml
+
+# 固定して使う歩行方策。学習時の設定の写し（gait.yaml）も同じディレクトリから読む
+gait_policy:
+  run_dir: outputs/gait/gait-command-tracking
+  checkpoint: 1500
+
+task:
+  episode:
+    # 学習の並列環境の数。GPU のメモリと速度を計測して決める
+    num_envs: 1024
+    # 高レベル方策の周期 10 Hz。歩行方策（50 Hz）を 5 回呼ぶ
+    high_level_period_s: 0.1
+    episode_length_s: 20.0
+    # 転倒とみなす傾き。歩行方策の学習時の終了条件（10°）より緩くしない（それ以上傾いた状態を歩行方策は知らない）
+    fall_roll_deg: 10.0
+    fall_pitch_deg: 10.0
+
+  # 高レベル方策が出せる速度指令。歩行方策が学習した範囲（vx [-0.5, 1.0]、vy [-0.4, 0.4]、yaw [-1.2, 1.2]）の内側にする
+  commands:
+    vx_mps: {low: -0.3, high: 0.6}
+    vy_mps: {low: -0.3, high: 0.3}
+    yaw_rate_radps: {low: -1.0, high: 1.0}
+
+  # エピソードの始めの配置。箱はロボットの正面に置き、目標の方向を ±60° に広げる（箱の横へ回り込む必要がある）
+  reset:
+    box_xy_jitter_m: 0.1
+    goal_distance_m: {low: 1.0, high: 1.0}
+    goal_direction_deg: {low: -60.0, high: 60.0}
+
+  success:
+    goal_radius_m: 0.3
+    # 成功とみなす維持時間は、規則ベースで押す実験で確定して requirements.md に書く
+    hold_time_s: 1.0
+
+  # シーンの有効範囲。外に出た箱やロボットはシーン外への離脱として終える
+  arena:
+    half_extent_x_m: 5.0
+    half_extent_y_m: 5.0
+
+  divergence:
+    # 歩行でも押す動作でも起こりえない速さ
+    max_speed_mps: 10.0
+
+  observation:
+    position: 1.0
+    lin_vel: 2.0
+    ang_vel: 0.25
+
+  reward:
+    # ロボット → 箱の向きと箱 → 目標の向きのなす角が約 25° 以内なら、意図した面を押しているとみなす
+    intended_face_min_cos: 0.9
+    scales:
+      box_progress: 10.0
+      success: 10.0
+      intended_face_contact: 0.1
+      box_rotation: -0.5
+      robot_fall: -10.0
+      unsafe_collision: -1.0
+      control_effort: -0.01
+
+# 学習した方策と比べる規則ベースの制御（箱の後ろへ回り込み、箱の中心へ直進して押す）。
+# 速さと旋回は commands の範囲に収める（読み込み時に検証する）
+rule_based:
+  approach_speed_mps: 0.5
+  push_speed_mps: 0.3
+  yaw_gain_per_s: 2.0
+  max_yaw_rate_radps: 1.0
+  # 箱の奥行きの半分（0.2 m）と Go2 の胴体の長さの半分（約 0.35 m）の和より大きくする
+  standoff_m: 0.8
+  # 箱の幅の半分（0.2 m）と Go2 の胴体の幅の半分（約 0.15 m）の和より大きくする
+  side_offset_m: 0.6
+  align_min_cos: 0.95
+
+# 高レベル方策の PPO とネットワークの設定。観測（22 次元）と行動（3 次元）が小さいため、歩行より小さいネットワークにする
+rsl_rl:
+  clip_param: 0.2
+  desired_kl: 0.01
+  entropy_coef: 0.005
+  gamma: 0.99
+  lam: 0.95
+  learning_rate: 0.0005
+  max_grad_norm: 1.0
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  schedule: adaptive
+  use_clipped_value_loss: true
+  value_loss_coef: 1.0
+  # 高レベル方策は 10 Hz なので、1 反復で各環境 2.4 秒分を集める
+  num_steps_per_env: 24
+  actor_hidden_dims: [256, 128, 64]
+  critic_hidden_dims: [256, 128, 64]
+  activation: elu
+  init_noise_std: 0.5
+  # チェックポイントを保存する反復の間隔。反復番号（0 から数える）がこの倍数のときと、最後の反復で保存する
+  save_interval: 50
+
+training:
+  # 学習用のシード。評価には別のシード（2001 など）を使う
+  seed: 12
+  # 目標の方向が広がる分、第 1 段階（約 100 反復で収束）より多めに取る
+  max_iterations: 301

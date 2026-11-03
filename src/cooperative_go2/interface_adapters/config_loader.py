@@ -1,0 +1,238 @@
+"""YAML の設定ファイルを読み込み、型付きの設定オブジェクトに変換して検証する。
+
+キーの過不足と値の型を厳密に確かめる。既定値で補わないため、設定ファイルにはすべてのキーを書く。
+数値は有限の値だけを受け付ける（YAML の .nan / .inf は不正とする）。
+"""
+
+import math
+from dataclasses import dataclass, fields, is_dataclass
+from pathlib import Path
+from typing import get_args, get_origin, get_type_hints
+
+import yaml
+
+from cooperative_go2.entities.config_validation import InvalidConfigError
+from cooperative_go2.entities.gait_config import GaitConfig
+from cooperative_go2.entities.gait_evaluation import GaitEvaluationSuite, InvalidEvaluationScenarioError
+from cooperative_go2.entities.push_config import RuleBasedPushConfig
+from cooperative_go2.entities.push_scene_config import BoxConfig
+from cooperative_go2.entities.push_task_config import (
+    PushTaskConfig,
+    PushTrainingRunConfig,
+    require_rule_based_within_commands,
+)
+from cooperative_go2.interface_adapters.genesis_scene_config import GenesisSceneConfig, require_genesis_friction
+from cooperative_go2.interface_adapters.rsl_rl_config import RslRlPpoConfig
+
+_ROOT_KEY_PATH = "<root>"
+# 歩行の設定ファイルのうち、RSL-RL 固有の設定を書く節の名前
+RSL_RL_SECTION = "rsl_rl"
+
+
+class ConfigValidationError(ValueError):
+    """設定ファイルの内容が不正（キーの過不足、型の不一致、値の不変条件の違反）であることを表す。
+
+    メッセージには不正な項目のキーのパス（例: command.lin_vel_x_mps.low）を含める。
+    """
+
+
+@dataclass(frozen=True)
+class GaitSettings:
+    """歩行の設定ファイル 1 つ分。gait は内側の層に渡し、rsl_rl は RSL-RL との接続にだけ使う。"""
+
+    gait: GaitConfig
+    rsl_rl: RslRlPpoConfig
+
+
+@dataclass(frozen=True)
+class PushSceneSettings:
+    """箱押しのシーンの設定ファイル 1 つ分。box は内側の層に渡し、genesis はシーンの構築にだけ使う。"""
+
+    box: BoxConfig
+    genesis: GenesisSceneConfig
+
+    def __post_init__(self) -> None:
+        # 箱の摩擦はドメインとしては正の値なら意味を持つが、Genesis が受け付ける範囲は狭いため、ここで早めに弾く
+        require_genesis_friction("box.friction", self.box.friction)
+
+
+@dataclass(frozen=True)
+class GaitPolicySource:
+    """固定して使う歩行方策の出所。
+
+    Attributes:
+        run_dir: 歩行学習の出力先（設定の写し gait.yaml とチェックポイントがあるディレクトリ）。
+            相対パスは現在の作業ディレクトリ起点。
+        checkpoint: 読み込むチェックポイントの反復番号（model_<番号>.pt）。
+    """
+
+    run_dir: str
+    checkpoint: int
+
+
+@dataclass(frozen=True)
+class PushTrainingSettings:
+    """1 台の箱押しの設定ファイル（configs/push_single.yaml）1 つ分。
+
+    Attributes:
+        scene_config: シーンの設定ファイル（configs/scenes/s1_push.yaml 形式）。相対パスは現在の作業ディレクトリ起点。
+        gait_policy: 固定して使う歩行方策の出所。
+        task: 学習環境の設定。内側の層に渡す。
+        rule_based: 学習した方策と比べる、規則ベースの制御の設定。
+        rsl_rl: 高レベル方策の PPO とネットワークの設定（RSL-RL との接続にだけ使う）。
+        training: 学習の実行条件。
+    """
+
+    scene_config: str
+    gait_policy: GaitPolicySource
+    task: PushTaskConfig
+    rule_based: RuleBasedPushConfig
+    rsl_rl: RslRlPpoConfig
+    training: PushTrainingRunConfig
+
+    def __post_init__(self) -> None:
+        require_rule_based_within_commands(self.rule_based, self.task.commands)
+
+
+def load_gait_settings(path: Path) -> GaitSettings:
+    """歩行の設定ファイル（configs/gait.yaml 形式）を読み込み、検証済みの設定を返す。
+
+    Args:
+        path: 設定ファイル。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
+    """
+    return parse_gait_settings(_read_yaml(path))
+
+
+def load_gait_evaluation_suite(path: Path) -> GaitEvaluationSuite:
+    """歩行方策の評価シナリオのファイル（configs/gait_eval.yaml 形式）を読み込み、検証済みのシナリオ一式を返す。
+
+    Args:
+        path: シナリオのファイル。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
+    """
+    return _build_dataclass(GaitEvaluationSuite, _read_yaml(path), _ROOT_KEY_PATH)
+
+
+def load_push_scene_settings(path: Path) -> PushSceneSettings:
+    """箱押しのシーンの設定ファイル（configs/scenes/s1_push.yaml 形式）を読み込み、検証済みの設定を返す。
+
+    Args:
+        path: 設定ファイル。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
+    """
+    return parse_push_scene_settings(_read_yaml(path))
+
+
+def load_push_training_settings(path: Path) -> PushTrainingSettings:
+    """1 台の箱押しの設定ファイル（configs/push_single.yaml 形式）を読み込み、検証済みの設定を返す。
+
+    歩行方策の学習時の設定との突き合わせは、歩行方策を読み込んだ後に require_compatible_with_gait() で行う。
+
+    Args:
+        path: 設定ファイル。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
+    """
+    return parse_push_training_settings(_read_yaml(path))
+
+
+def parse_push_training_settings(data: object) -> PushTrainingSettings:
+    """YAML を読み込んだ値（dict）から、検証済みの箱押しの設定を作る。
+
+    Raises:
+        ConfigValidationError: キーの過不足・型・値が不正。
+    """
+    return _build_dataclass(PushTrainingSettings, data, _ROOT_KEY_PATH)
+
+
+def parse_push_scene_settings(data: object) -> PushSceneSettings:
+    """YAML を読み込んだ値（dict）から、検証済みの箱押しのシーンの設定を作る。
+
+    Raises:
+        ConfigValidationError: キーの過不足・型・値が不正。
+    """
+    return _build_dataclass(PushSceneSettings, data, _ROOT_KEY_PATH)
+
+
+def parse_gait_settings(data: object) -> GaitSettings:
+    """YAML を読み込んだ値（dict）から検証済みの設定を作る。
+
+    Raises:
+        ConfigValidationError: キーの過不足・型・値が不正。
+    """
+    mapping = _require_type(data, dict, _ROOT_KEY_PATH)
+    if RSL_RL_SECTION not in mapping:
+        raise ConfigValidationError(f"{_ROOT_KEY_PATH}: キー {RSL_RL_SECTION!r} が無い")
+    gait_data = {key: value for key, value in mapping.items() if key != RSL_RL_SECTION}
+    return GaitSettings(
+        gait=_build_dataclass(GaitConfig, gait_data, _ROOT_KEY_PATH),
+        rsl_rl=_build_dataclass(RslRlPpoConfig, mapping[RSL_RL_SECTION], RSL_RL_SECTION),
+    )
+
+
+def _read_yaml(path: Path) -> object:
+    text = path.read_text(encoding="utf-8")
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        raise ConfigValidationError(f"{path}: YAML として読めない: {error}") from error
+
+
+def _join_key(parent: str, child: str) -> str:
+    return child if parent == _ROOT_KEY_PATH else f"{parent}.{child}"
+
+
+def _build_dataclass[T](cls: type[T], data: object, key_path: str) -> T:
+    mapping = _require_type(data, dict, key_path)
+    expected_keys = {field.name for field in fields(cls)}  # type: ignore[arg-type]
+    missing = expected_keys - mapping.keys()
+    unknown = mapping.keys() - expected_keys
+    if missing or unknown:
+        raise ConfigValidationError(f"{key_path}: キーの過不足 不足={sorted(missing)} 未知={sorted(unknown)}")
+    type_hints = get_type_hints(cls)
+    kwargs = {name: _convert(type_hints[name], mapping[name], _join_key(key_path, name)) for name in expected_keys}
+    # 不変条件の違反は、どの設定でも「設定ファイルを直すべき」点で同じなので同じ例外に変換する
+    try:
+        return cls(**kwargs)
+    except (InvalidConfigError, InvalidEvaluationScenarioError) as error:
+        raise ConfigValidationError(f"{key_path}: {error}") from error
+
+
+def _convert(expected_type: object, value: object, key_path: str) -> object:
+    if is_dataclass(expected_type) and isinstance(expected_type, type):
+        return _build_dataclass(expected_type, value, key_path)
+    if expected_type is bool:
+        return _require_type(value, bool, key_path)
+    if expected_type is str:
+        return _require_type(value, str, key_path)
+    if expected_type is int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ConfigValidationError(f"{key_path}: 整数が必要だが {value!r} だった")
+        return value
+    if expected_type is float:
+        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+            raise ConfigValidationError(f"{key_path}: 有限の数値が必要だが {value!r} だった")
+        return float(value)
+    if get_origin(expected_type) is tuple:
+        element_type = get_args(expected_type)[0]
+        items = _require_type(value, list, key_path)
+        return tuple(_convert(element_type, item, f"{key_path}[{index}]") for index, item in enumerate(items))
+    raise TypeError(f"{key_path}: 設定の読み込みが対応していない型 {expected_type!r}")
+
+
+def _require_type[V](value: object, expected: type[V], key_path: str) -> V:
+    if not isinstance(value, expected):
+        raise ConfigValidationError(f"{key_path}: {expected.__name__} が必要だが {value!r} だった")
+    return value

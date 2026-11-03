@@ -1,0 +1,42 @@
+# Go2 歩行方策の評価シナリオ（go2-evaluate-gait --scenarios で読み込む）。
+# 各シナリオは全環境をリセットしてから始め、区間（segments）を順に切り替える。
+# 区間の長さと settle_time_s は制御周期（env.control_dt_s）の整数倍にし、シナリオの長さは学習時の
+# エピソードの長さ（env.episode_length_s）以内にする。
+# 指令は学習時の範囲（configs/gait.yaml の command 節）の中に収める。範囲の外なら評価を始める前に止まる。
+# すべてのキーが必須。読み込み時に過不足・型・値の範囲を検証する。
+
+# 追従誤差の集計から除く過渡の時間 [s]。各区間の始め（指令を切り替えた直後）と、転倒した環境の立ち直り
+# （転倒したステップとその後のこの時間）に使う。転倒そのものは除かずに数える
+settle_time_s: 1.0
+
+scenarios:
+  # 歩行方策に求める基本の動き（停止・前進・左右のその場旋回）。README の合格基準はこの 4 シナリオの結果で判定する
+  - name: stop
+    segments:
+      - {command: {vx_mps: 0.0, vy_mps: 0.0, yaw_rate_radps: 0.0}, duration_s: 8.0}
+  - name: forward
+    segments:
+      - {command: {vx_mps: 0.5, vy_mps: 0.0, yaw_rate_radps: 0.0}, duration_s: 8.0}
+  - name: turn_in_place_left
+    segments:
+      - {command: {vx_mps: 0.0, vy_mps: 0.0, yaw_rate_radps: 1.0}, duration_s: 8.0}
+  - name: turn_in_place_right
+    segments:
+      - {command: {vx_mps: 0.0, vy_mps: 0.0, yaw_rate_radps: -1.0}, duration_s: 8.0}
+
+  # 後退と横移動。合格基準の判定には使わず、参考として記録する
+  - name: backward
+    segments:
+      - {command: {vx_mps: -0.3, vy_mps: 0.0, yaw_rate_radps: 0.0}, duration_s: 8.0}
+  - name: sidestep_left
+    segments:
+      - {command: {vx_mps: 0.0, vy_mps: 0.3, yaw_rate_radps: 0.0}, duration_s: 8.0}
+
+  # 方向転換: 前進 → 停止 → その場で右に旋回 → 左へ曲がりながら前進 → 停止
+  - name: direction_change
+    segments:
+      - {command: {vx_mps: 0.5, vy_mps: 0.0, yaw_rate_radps: 0.0}, duration_s: 4.0}
+      - {command: {vx_mps: 0.0, vy_mps: 0.0, yaw_rate_radps: 0.0}, duration_s: 3.0}
+      - {command: {vx_mps: 0.0, vy_mps: 0.0, yaw_rate_radps: -1.0}, duration_s: 3.0}
+      - {command: {vx_mps: 0.5, vy_mps: 0.0, yaw_rate_radps: 0.5}, duration_s: 4.0}
+      - {command: {vx_mps: 0.0, vy_mps: 0.0, yaw_rate_radps: 0.0}, duration_s: 3.0}
