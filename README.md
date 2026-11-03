@@ -107,10 +107,59 @@ uv run --frozen python scripts/p2_materials/export_training_curves.py outputs/pu
 - 箱を置くシーンでは、物理エンジンの摩擦円錐を `elliptic` にしている。Genesis の既定の `pyramidal` では、滑っている箱に床から押し上げる誤った力が生じ、箱が浮いたり飛んで転がったりする。歩行方策は `pyramidal` で学習したものだが、`elliptic` でも合格基準を満たすことを確かめている。比較の動画は `scripts/p2_scene_check/record_friction_cone_demo.py` で撮れる。
 - 学習ログは `uv run --frozen tensorboard --logdir outputs/push` で見る。
 
+## ROS 2 を経由した箱押し（推論だけを行う手順）
+
+学習済みの歩行方策と箱押しの方策を、ROS 2 の別々のノードとして動かし、1 台の Go2 が箱を目標領域へ押す。学習はしない（学習済みモデルは上の「学習済みモデルの取得」で置く）。
+
+| ノード（Namespace `/go2_a`） | 実行ファイル | 役割 |
+|---|---|---|
+| `genesis_sim` | `go2-ros2-sim` | Genesis のシーンを進める唯一のプロセス。`/clock`・`odom`・`joint_states`・`box_contact`・`/team/object_state`・TF を配信し、`joint_targets` を受けて PD 制御する。試行ごとに歩行方策をリセットし、高レベル方策に目標を `ClearCorridor` で依頼して、成功と終了を判定・記録する |
+| `gait_policy` | `go2-ros2-gait` | `joint_states`・`odom`・`cmd_vel` から 12 関節の目標（`joint_targets`）を出す（50 Hz） |
+| `coord_policy` | `go2-ros2-coord` | `odom`・`/team/object_state`・`box_contact` と目標から速度指令（`cmd_vel`）を出す（10 Hz） |
+
+歩行方策と高レベル方策のノードは Genesis を読み込まないので、物理を進められない。受け手は古い指令（速度指令 0.3 s、関節目標 0.1 s。シミュレーション時間）を停止の指令に切り替えるので、方策のノードを止めるとロボットはその場で止まる。設定は `configs/ros2_push_single.yaml`。
+
+```bash
+# 準備（初回と ros2_ws の msg / action を変えたとき）。venv を外してビルドする
+bash scripts/setup/build_ros2_ws.sh
+
+# 実行するシェルで毎回 source する
+source /opt/ros/jazzy/setup.bash
+source ros2_ws/install/setup.bash
+source scripts/setup/env.sh
+
+# 3 ノードと rosbag2 の記録を 1 コマンドで起動する。全試行を終えると自動で止まる
+ros2 launch ros2_ws/launch/push_single.launch.py seed:=2001 num_trials:=64 run_name:=e2-ros2-wide60-seed2001 \
+    device:=cuda video:=false record_bag:=true
+
+# 方策のノードを止めるとロボットが止まることを確かめる（高レベル方策 → 歩行方策の順に止める）
+uv run --frozen python scripts/p3_ros2_check/check_stop_on_node_loss.py --run-name p3-stop-check --seed 2002 \
+    --device cuda --video true
+
+# 記録の時刻が /clock と整合しているかを確かめる
+uv run --frozen python scripts/p3_ros2_check/check_bag_clock.py outputs/ros2_bags/e2-ros2-wide60-seed2001
+```
+
+- 結果は `outputs/ros2_eval/<run_name>/` に、`go2-evaluate-push` と同じ形式の `trials.csv`・`summary.json`（`algorithm` は `policy_ros2`）と、
+  ROS 2 の経路の計測値 `ros2_metrics.json`（適用した関節目標の遅れ・往復の遅延・実時間比）、各ノードの推論時間（`nodes/`）を保存する。
+  rosbag2 は `outputs/ros2_bags/<run_name>/`（mcap）。保存先が既にあれば止まる。
+- 全試行の配置と初期姿勢を学習環境の評価と同じ順で引くので、同じシード・`device:=cuda`・試行の数で `go2-evaluate-push --num-envs` を
+  評価すると、試行ごとに同じ初期条件になる。
+- `video:=true` で評価動画を撮ると、描画のため実時間比が 0.15 程度まで下がる（シミュレーション時間で進むので結果は変わらない）。
+- 物理は方策の応答を待たずに制御周期ごとに進め、関節目標は学習時と同じく、元の状態から 1 制御周期遅れで適用する。
+  各ノードは PyTorch の CPU のスレッドを 1 本にしている（`runtime.torch_num_threads`）。既定のスレッド数では、他のプロセスと
+  CPU を取り合うと歩行方策の推論が制御周期（20 ms）を超えて遅れ、転倒が増えた。
+- 学習環境での評価（目標の方向 ±60°、シード 2001・2002・2003、各 64 試行）と同じ初期条件で、ROS 2 経由でも成功率は 3 シードとも 100 %
+  （CPU に負荷をかけた状態・かけない状態の両方）。成功までの時間は、学習環境での評価より平均 0.06 秒長い。
+
 ## テスト
 
 ```bash
+# ユニットテスト（シミュレータと ROS 2 を使わない）
 uv run --frozen pytest
+
+# ROS 2 のメッセージを使うテスト（/opt/ros/jazzy と ros2_ws/install の setup.bash を source してから）
+uv run --frozen pytest tests/ros2
 ```
 
 ## 参考にしたもの
