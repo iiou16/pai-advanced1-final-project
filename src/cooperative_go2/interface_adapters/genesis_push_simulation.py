@@ -9,6 +9,7 @@ from cooperative_go2.entities.go2_state import Go2State
 from cooperative_go2.entities.planar_frame import yaw_from_quat_wxyz
 from cooperative_go2.entities.push_layout import PushLayout
 from cooperative_go2.entities.push_observation import PlanarBodyState
+from cooperative_go2.entities.rigid_body_pose import RigidBodyPose
 from cooperative_go2.interface_adapters.config_loader import PushSceneSettings
 from cooperative_go2.interface_adapters.genesis_go2_body import GenesisGo2Body
 from cooperative_go2.interface_adapters.genesis_push_scene import (
@@ -31,6 +32,10 @@ def _read_planar(entity: RigidEntity) -> PlanarBodyState:
         lin_vel_xy_mps=entity.get_vel()[:, PLANAR_AXES],
         yaw_rate_radps=entity.get_ang()[:, VERTICAL_AXIS_INDEX],
     )
+
+
+def _read_pose(entity: RigidEntity) -> RigidBodyPose:
+    return RigidBodyPose.from_world_velocities(entity.get_pos(), entity.get_quat(), entity.get_vel(), entity.get_ang())
 
 
 class GenesisPushSimulation:
@@ -88,6 +93,14 @@ class GenesisPushSimulation:
     def read_box_planar(self) -> PlanarBodyState:
         """箱の水平面の状態（ワールド座標系）を返す。"""
         return _read_planar(self._scene.box)
+
+    def read_robot_pose(self) -> RigidBodyPose:
+        """Go2 の胴体の位置・姿勢・本体座標系の速度を返す。"""
+        return _read_pose(self._scene.robot)
+
+    def read_box_pose(self) -> RigidBodyPose:
+        """箱の位置・姿勢・本体座標系の速度を返す。"""
+        return _read_pose(self._scene.box)
 
     def robot_box_contact_mask(self) -> torch.Tensor:
         """Go2 が箱に触れている環境のマスク (num_envs,) を返す。"""
