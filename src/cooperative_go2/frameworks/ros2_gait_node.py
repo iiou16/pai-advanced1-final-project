@@ -1,7 +1,7 @@
 """ROS 2 の歩行方策ノード。関節の状態と速度指令から、12 関節の目標角を出す。
 
 Genesis を読み込まず、物理ステップを進められない。受け取った状態ごとに 1 回推論し、目標を配信する。
-速度指令が有効期限より古ければ停止の指令（すべて 0）で歩かせる（要件 5.5）。
+速度指令が有効期限より古ければ停止の指令（すべて 0）で歩かせ、高レベル方策のノードが止まったらその場で立ち止まる。
 
 起動例（launch から起動する。Namespace でロボットを分ける）:
     go2-ros2-gait --config configs/ros2_push_single.yaml \\
@@ -82,6 +82,8 @@ class GaitPolicyNode:
             (JOINT_SOURCE, ODOM_SOURCE), MAX_PENDING_STAMPS
         )
         self._command: StampedVelocityCommand | None = None
+        # 今の試行の最初の状態の時刻。これより前の時刻の速度指令は前の試行のものなので使わない
+        self._episode_start_ns: int | None = None
         self.inference = LatencyStats()
         # 状態の時刻から見た、使った速度指令の古さ（シミュレーション時間）。速度指令の有効期限を決める根拠にする
         self.command_age = LatencyStats()
@@ -110,6 +112,7 @@ class GaitPolicyNode:
         self._follower.reset()
         self._aligner = StampAligner((JOINT_SOURCE, ODOM_SOURCE), MAX_PENDING_STAMPS)
         self._command = None
+        self._episode_start_ns = None
         response.success = True
         return response
 
@@ -122,10 +125,16 @@ class GaitPolicyNode:
         if not isinstance(joint_state, StampedJointState) or not isinstance(odom, StampedPose):
             raise TypeError(f"組にした状態の型が想定と違う: {type(joint_state)}, {type(odom)}")
         proprioception = proprioception_from_pose(odom.pose, joint_state.dof_pos, joint_state.dof_vel)
-        if self._command is not None:
-            self.command_age.add(ns_to_seconds(aligned.stamp_ns - self._command.stamp_ns))
+        if self._episode_start_ns is None:
+            self._episode_start_ns = aligned.stamp_ns
+        command = self._command
+        if command is not None and command.stamp_ns < self._episode_start_ns:
+            # リセットの後に届いた、前の試行の状態から決めた指令
+            command = None
+        if command is not None:
+            self.command_age.add(ns_to_seconds(aligned.stamp_ns - command.stamp_ns))
         started = time.perf_counter()
-        output = self._follower.compute(proprioception, aligned.stamp_ns, self._command)
+        output = self._follower.compute(proprioception, aligned.stamp_ns, command)
         self.inference.add(time.perf_counter() - started)
         if output.command_was_stopped:
             self.stopped_steps += 1
@@ -173,9 +182,8 @@ def main(argv: list[str] | None = None) -> None:
         while True:
             executor.spin_once(timeout_sec=SPIN_TIMEOUT_S)
     except KeyboardInterrupt:
-        # launch の終了や停止の確認（SIGINT）で止める。計測値を書いてから終わる
+        # launch の終了や停止の確認（SIGINT）で止める。正常に終えたときだけ計測値を書く（異常終了の計測値を残さない）
         logger.info("SIGINT を受けたので歩行方策のノードを終える")
-    finally:
         write_node_metrics(
             args.metrics_dir / METRICS_FILENAME,
             {
@@ -184,6 +192,7 @@ def main(argv: list[str] | None = None) -> None:
                 "stopped_command_steps": gait_node.stopped_steps,
             },
         )
+    finally:
         executor.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()

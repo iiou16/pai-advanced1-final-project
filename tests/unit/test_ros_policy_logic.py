@@ -89,6 +89,31 @@ def test_gait_follower_stops_without_fresh_command(gait: GaitConfig, command_sta
     assert torch.count_nonzero(_commands_in_gait_observation(policy)) == 0
 
 
+def test_gait_follower_resumes_when_fresh_command_arrives_after_expiry(gait: GaitConfig) -> None:
+    policy = RecordingPolicy(torch.zeros(1, 12))
+    follower = GaitCommandFollower(GaitController(policy, gait, 1, "cpu"), EXPIRY_NS)
+    old = StampedVelocityCommand(stamp_ns=0, values=torch.tensor([[0.5, 0.0, 0.0]]))
+    stopped = follower.compute(_standing(), EXPIRY_NS + 1, old)
+
+    fresh = StampedVelocityCommand(stamp_ns=EXPIRY_NS + 20, values=torch.tensor([[0.5, 0.0, 0.0]]))
+    resumed = follower.compute(_standing(), EXPIRY_NS + 20, fresh)
+
+    assert stopped.command_was_stopped
+    assert not resumed.command_was_stopped
+    assert _commands_in_gait_observation(policy)[0, 0] > 0
+
+
+def test_gait_follower_stops_on_command_stamped_far_in_future(gait: GaitConfig) -> None:
+    policy = RecordingPolicy(torch.zeros(1, 12))
+    follower = GaitCommandFollower(GaitController(policy, gait, 1, "cpu"), EXPIRY_NS)
+    future = StampedVelocityCommand(stamp_ns=10**15, values=torch.tensor([[0.5, 0.0, 1.0]]))
+
+    output = follower.compute(_standing(), 1000, future)
+
+    assert output.command_was_stopped
+    assert torch.count_nonzero(_commands_in_gait_observation(policy)) == 0
+
+
 def test_gait_follower_reset_clears_last_action(gait: GaitConfig) -> None:
     policy = RecordingPolicy(torch.full((1, 12), 0.5))
     follower = GaitCommandFollower(GaitController(policy, gait, 1, "cpu"), EXPIRY_NS)

@@ -39,9 +39,21 @@ class LatencyStats:
 
 
 def write_node_metrics(path: Path, metrics: Mapping[str, object]) -> None:
-    """ノードの計測値を JSON で書く。親ディレクトリが無ければ作る。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(metrics, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    """ノードの計測値を JSON で新しいファイルに書く。既にあるファイルは上書きしない。
+
+    Args:
+        path: 書き出すファイル。親ディレクトリが無ければ作るが、その親（実行の保存先）は既にあること。
+            保存先はシミュレーションノードが作るので、保存先が無いのは実行を始められなかったことを表す。
+        metrics: 計測値。JSON にできる値だけを含むこと（NaN は不可）。
+
+    Raises:
+        FileNotFoundError: 実行の保存先（path の親の親）が無い。
+        FileExistsError: path が既にある。前の実行の計測値を上書きしないために止める。
+    """
+    path.parent.mkdir(exist_ok=True)
+    text = json.dumps(metrics, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+    with path.open("x", encoding="utf-8") as file:
+        file.write(text)
 
 
 class RoundTripLatencyProbe:

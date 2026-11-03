@@ -1,8 +1,8 @@
 """ROS 2 の高レベル方策ノード。Go2 と箱の状態から、学習済みの方策で速度指令を決める。
 
 Genesis を読み込まず、物理ステップを進められない。目標は ClearCorridor のアクションで受け付ける。
-指令は、目標を依頼された時刻（試行の始め）の状態から、高レベル方策の周期ごとの状態で決める。
-学習時と同じく、エピソードの始めの状態から 0.1 s ごとに判断するため。
+指令は、目標を依頼された時刻（試行の始め）の状態から、高レベル方策の周期（high_level_period_s）ごとの状態で決める。
+学習時と同じく、エピソードの始めの状態から一定の周期で判断するため。
 
 起動例（launch から起動する。Namespace でロボットを分ける）:
     go2-ros2-coord --config configs/ros2_push_single.yaml --metrics-dir outputs/ros2_eval/<run>/nodes \\
@@ -89,6 +89,8 @@ class _ActiveGoal:
     start_stamp_ns: int
     finished: threading.Event
     last_decision_ns: int | None = None
+    # 次に判断する、試行の開始から数えた周期の番号。判断の時刻を開始時刻 + 番号 × 周期の格子にそろえる
+    next_decision_index: int = 0
     succeeded: bool = False
 
 
@@ -185,8 +187,11 @@ class CoordPolicyNode:
         goal = self._goal
         if goal is None or goal.finished.is_set() or aligned.stamp_ns < goal.start_stamp_ns:
             return
-        if goal.last_decision_ns is not None and aligned.stamp_ns - goal.last_decision_ns < self._period_ns:
+        # 状態を取りこぼして格子の時刻より後の状態で判断しても、次の判断は格子の時刻に戻す（判断の時刻がずれ続けない）
+        elapsed_ns = aligned.stamp_ns - goal.start_stamp_ns
+        if elapsed_ns < goal.next_decision_index * self._period_ns:
             return
+        goal.next_decision_index = elapsed_ns // self._period_ns + 1
         robot, box, contact = (aligned.values[source] for source in SOURCES)
         if not isinstance(robot, StampedPose) or not isinstance(box, StampedPose):
             raise TypeError(f"組にした状態の型が想定と違う: {type(robot)}, {type(box)}")
@@ -258,10 +263,10 @@ def main(argv: list[str] | None = None) -> None:
         while True:
             executor.spin_once(timeout_sec=SPIN_TIMEOUT_S)
     except KeyboardInterrupt:
-        # launch の終了や停止の確認（SIGINT）で止める。計測値を書いてから終わる
+        # launch の終了や停止の確認（SIGINT）で止める。正常に終えたときだけ計測値を書く（異常終了の計測値を残さない）
         logger.info("SIGINT を受けたので高レベル方策のノードを終える")
-    finally:
         write_node_metrics(args.metrics_dir / METRICS_FILENAME, {"inference_s": coord_node.inference.summary()})
+    finally:
         coord_node.stop()
         executor.shutdown()
         node.destroy_node()

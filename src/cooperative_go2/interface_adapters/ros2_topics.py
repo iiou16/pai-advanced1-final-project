@@ -1,6 +1,6 @@
 """ROS 2 の実行系のトピック・サービス・アクションの名前と QoS。
 
-ロボットごとの名前は相対名にし、ノードを起動するときの Namespace（例: /go2_a）で分ける（要件 5.4）。
+ロボットごとの名前は相対名にし、ノードを起動するときの Namespace（例: /go2_a）で分ける。複数台で混線させないため。
 シミュレーションノードはロボットと同じ Namespace で起動する。
 """
 
@@ -17,7 +17,7 @@ CMD_VEL_TOPIC = "cmd_vel"
 JOINT_TARGETS_TOPIC = "joint_targets"
 # シミュレーションノード → 歩行方策のノード（ロボットを初期姿勢に戻したことを伝える）
 GAIT_RESET_SERVICE = "gait_policy/reset"
-# 依頼者 → 高レベル方策のノード（P3 ではシミュレーションノードが依頼者を兼ねる）
+# 依頼者 → 高レベル方策のノード（1 台の構成ではシミュレーションノードが依頼者を兼ねる）
 CLEAR_CORRIDOR_ACTION = "clear_corridor"
 
 # 座標系の名前。WORLD_FRAME はシミュレーションのワールド座標系（真値）
@@ -25,7 +25,7 @@ WORLD_FRAME = "map"
 BOX_FRAME = "box"
 BASE_LINK_FRAME = "base_link"
 
-# 毎物理ステップ配信する状態。1 回の取りこぼしは次のステップで補われるので、再送しない
+# 毎物理ステップ配信する状態。取りこぼしても次のステップの状態を使えばよいので、再送しない
 SENSOR_QOS = QoSProfile(
     history=HistoryPolicy.KEEP_LAST,
     depth=10,

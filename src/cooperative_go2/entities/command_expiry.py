@@ -26,7 +26,7 @@ def ns_to_seconds(nanoseconds: int) -> float:
 
 @dataclass(frozen=True)
 class CommandExpiryConfig:
-    """受け手が指令を古いとみなすまでの時間。超えたら停止の指令に切り替える（要件 5.5）。
+    """受け手が指令を古いとみなすまでの時間。超えたら停止の指令に切り替え、送り手が止まったらロボットも止める。
 
     Attributes:
         velocity_command_s: 速度指令（高レベル方策 → 歩行方策）の有効期限 [s]（シミュレーション時間）。
@@ -43,9 +43,10 @@ class CommandExpiryConfig:
 
 
 def is_command_fresh(command_stamp_ns: int, now_ns: int, expiry_ns: int) -> bool:
-    """時刻 command_stamp_ns の指令が、時刻 now_ns でまだ有効期限内（経過時間が expiry_ns 以下）かを返す。
+    """時刻 command_stamp_ns の指令が、時刻 now_ns で有効か（時刻の差が前後とも expiry_ns 以内か）を返す。
 
-    指令の時刻が now_ns より後でも有効とする。送り手が受け手より先に新しい状態を受け取って指令を決めると、
-    受け手がまだ処理していない時刻の指令が届くため。
+    指令の時刻が now_ns より後でも、差が expiry_ns 以内なら有効とする。送り手が受け手より先に新しい状態を受け取って
+    指令を決めると、受け手がまだ処理していない時刻の指令が届くため。それより先の時刻の指令は無効とする。
+    先の時刻を無制限に有効にすると、そうした指令 1 つで、送り手が止まった後も期限まで動き続けてしまうため。
     """
-    return now_ns - command_stamp_ns <= expiry_ns
+    return abs(now_ns - command_stamp_ns) <= expiry_ns

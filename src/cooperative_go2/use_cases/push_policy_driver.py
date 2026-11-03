@@ -48,7 +48,8 @@ class PushPolicyDecision:
         commands: 速度指令 (1, 3)。設定の範囲に切り詰めた値。
         box_goal_distance_m: 箱の中心から目標領域の中心までの距離 [m]。
         in_goal_duration_s: 箱が目標領域に入ったまま続いた時間 [s]。
-        succeeded: 成功の条件（目標領域に入った状態を所定の時間続けた）を満たしたか。
+        succeeded: 成功の条件（目標領域に入った状態を所定の時間続けた）を満たしたか。依頼の結果を返すための判定で、
+            試行の記録には使わない（記録はシミュレーションノードが真値に対して judge_push_step で判定する）。
     """
 
     commands: torch.Tensor

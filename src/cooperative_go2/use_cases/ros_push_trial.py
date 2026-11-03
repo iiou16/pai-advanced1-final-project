@@ -2,7 +2,7 @@
 
 物理ステップを進めるのはこの流れだけで、歩行方策と高レベル方策は別のプロセスが ROS 2 の通信で動かす。
 物理は方策の応答を待たずに制御周期ごとに進め、届いた関節目標を JointTargetScheduler で選んで適用する。
-方策のノードが止まると目標が古くなり、ロボットは既定姿勢を保って止まる（要件 5.5、5.6）。
+方策のノードが止まると目標が古くなり、ロボットは既定姿勢を保って止まる。
 成功と終了は、学習環境と同じ判定（judge_push_step）を高レベル方策の周期でシミュレーションの真値に対して行う。
 """
 
@@ -23,6 +23,18 @@ from cooperative_go2.entities.push_termination import PushTerminationReason, det
 from cooperative_go2.entities.push_trial import PlanarPose, PushEpisodeResult
 from cooperative_go2.entities.rigid_body_pose import RigidBodyPose
 from cooperative_go2.use_cases.joint_target_scheduler import JointTargetScheduler, TargetSelection
+
+
+class InvalidPushTrialTimingError(ValueError):
+    """試行の時間の条件が不正であることを表す。"""
+
+
+class NoJointTargetsAppliedError(RuntimeError):
+    """試行の間に、歩行方策の関節目標を一度も適用できなかったことを表す。
+
+    歩行方策のノードが動いていない、または状態や目標が届いていない。既定姿勢のまま終わった試行を、方策の成績として
+    記録しないために止める。
+    """
 
 
 @dataclass(frozen=True)
@@ -110,6 +122,13 @@ class PushTrialTiming:
     control_dt_ns: int
     gait_steps_per_high_level_step: int
 
+    def __post_init__(self) -> None:
+        if self.control_dt_ns <= 0 or self.gait_steps_per_high_level_step < 1:
+            raise InvalidPushTrialTimingError(
+                f"制御周期は正、高レベル方策の 1 周期の物理ステップは 1 以上が必要: "
+                f"{self.control_dt_ns} ns, {self.gait_steps_per_high_level_step}"
+            )
+
 
 @dataclass(frozen=True)
 class PushTrialRecord:
@@ -174,6 +193,9 @@ class PushTrialRunner:
             trial_index: 試行の番号（結果の env_index に入れる）。
             layout: 箱と目標の配置（1 行）。
             reset_dof_pos: リセット時の関節角 (1, 12) [rad]。
+
+        Raises:
+            NoJointTargetsAppliedError: 試行の間に歩行方策の関節目標を一度も適用できなかった。
         """
         ports = self._ports
         self._now_ns += self._timing.control_dt_ns
@@ -188,6 +210,8 @@ class PushTrialRunner:
         wall_start = ports.wall_clock()
         outcome = self._run_until_terminated(layout.goal_xy_m)
         ports.peers.end_task()
+        if outcome.selections[TargetSelection.POLICY] == 0:
+            raise NoJointTargetsAppliedError(f"試行 {trial_index} で歩行方策の関節目標を一度も適用できなかった")
         result = PushEpisodeResult(
             env_index=trial_index,
             robot_start=_pose(start_state.robot.to_planar()),
@@ -198,7 +222,7 @@ class PushTrialRunner:
             termination_reason=outcome.reason,
             high_level_steps=outcome.high_level_steps,
             wall_time_s=ports.wall_clock() - wall_start,
-            # S1 には壁も他のロボットも無いため、箱以外との衝突は起こらない
+            # 1 台の箱押しのシーンには壁も他のロボットも無いため、箱以外との衝突は起こらない
             collisions=0,
             falls=int(outcome.reason == PushTerminationReason.FALL),
         )

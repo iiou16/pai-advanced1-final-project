@@ -39,8 +39,8 @@ class GaitFollowerOutput:
 class GaitCommandFollower:
     """1 台の Go2 の歩行方策の推論を、受け取った速度指令の有効期限を確かめて行う。
 
-    受け取った速度指令が有効期限より古いか、まだ 1 つも受け取っていなければ、停止の指令（すべて 0）を歩行方策に与える
-    （要件 5.5）。高レベル方策のノードが止まると、ロボットはその場で立ち止まる。
+    受け取った速度指令が有効期限より古いか、まだ 1 つも受け取っていなければ、停止の指令（すべて 0）を歩行方策に与える。
+    高レベル方策のノードが止まると、ロボットはその場で立ち止まる。
     """
 
     def __init__(self, controller: GaitController, velocity_command_expiry_ns: int) -> None:
@@ -62,6 +62,9 @@ class GaitCommandFollower:
             proprioception: 1 台分の自己受容の状態。
             state_stamp_ns: 状態を読んだ時点のシミュレーション時刻 [ns]。指令の期限の判定に使う。
             command: 最後に受け取った速度指令。まだ受け取っていなければ None。
+
+        Returns:
+            目標関節角と、停止の指令に切り替えたか。停止に切り替えても歩行方策は呼ぶ（前回の行動を更新し続けるため）。
         """
         fresh = command is not None and is_command_fresh(command.stamp_ns, state_stamp_ns, self._expiry_ns)
         values = command.values if fresh and command is not None else self._stop_command

@@ -1,9 +1,9 @@
 """シミュレーションノードが、受け取った関節目標のうち次の物理ステップに適用するものを選ぶ。
 
 歩行方策は、学習時に「時刻 t の状態から作った目標を、t から 1 制御周期後の物理ステップに適用する」遅れで学習している
-（env.simulate_action_latency、D19）。ROS 2 の経路でも同じ遅れになるよう、物理を進める直前の時刻 now から
+（env.simulate_action_latency）。ROS 2 の経路でも同じ遅れになるよう、物理を進める直前の時刻 now から
 latency_steps 制御周期より前の状態で作った目標のうち、最も新しいものを適用する。通信がそれより遅れて目標が届いて
-いなければ、それより古い目標を使い、有効期限より古い目標しか無ければ既定姿勢を保つ（要件 5.5）。
+いなければ、それより古い目標を使い、有効期限より古い目標しか無ければ既定姿勢を保つ（歩行方策のノードが止まったら止まる）。
 """
 
 import threading
@@ -13,6 +13,14 @@ from enum import Enum
 import torch
 
 from cooperative_go2.entities.command_expiry import is_command_fresh
+
+
+class InvalidJointTargetTimingError(ValueError):
+    """目標を選ぶ時間の条件が不正（周期が正でない、期限が学習時の遅れを許さない等）であることを表す。"""
+
+
+class InvalidSelectedJointTargetsError(ValueError):
+    """選んだ目標の出所と遅れの組み合わせが矛盾していることを表す。"""
 
 
 class TargetSelection(Enum):
@@ -40,6 +48,13 @@ class SelectedJointTargets:
     selection: TargetSelection
     delay_steps: int | None
 
+    def __post_init__(self) -> None:
+        has_delay = self.delay_steps is not None
+        if has_delay != (self.selection is TargetSelection.POLICY):
+            raise InvalidSelectedJointTargetsError(
+                f"遅れは歩行方策の目標を適用したときだけ持つ: selection={self.selection}, delay_steps={self.delay_steps}"
+            )
+
 
 @dataclass(frozen=True)
 class JointTargetTiming:
@@ -55,6 +70,18 @@ class JointTargetTiming:
     latency_steps: int
     expiry_ns: int
 
+    def __post_init__(self) -> None:
+        if self.control_dt_ns <= 0:
+            raise InvalidJointTargetTimingError(f"制御周期は正の値が必要: {self.control_dt_ns} ns")
+        if self.latency_steps < 0:
+            raise InvalidJointTargetTimingError(f"学習時の遅れは 0 以上が必要: {self.latency_steps}")
+        # 学習時の遅れに通信の 1 制御周期を足した遅れまでは許す。期限がそれより短いと、通常の遅れでも常に止まる
+        min_expiry_ns = (self.latency_steps + 1) * self.control_dt_ns
+        if self.expiry_ns < min_expiry_ns:
+            raise InvalidJointTargetTimingError(
+                f"有効期限 {self.expiry_ns} ns は、学習時の遅れ ＋ 1 制御周期（{min_expiry_ns} ns）以上が必要"
+            )
+
 
 class JointTargetScheduler:
     """受け取った関節目標を元の状態の時刻ごとに持ち、物理ステップごとに適用するものを選ぶ。
@@ -63,9 +90,13 @@ class JointTargetScheduler:
     """
 
     def __init__(self, timing: JointTargetTiming, default_joint_targets: torch.Tensor) -> None:
-        """時間の条件と、目標が無いときに保つ既定姿勢の関節角 (1, 12) [rad] を受け取る。"""
+        """時間の条件と、目標が無いときに保つ既定姿勢の関節角 (1, 12) [rad] を受け取る。
+
+        既定姿勢は複製して持つ。呼び出し側が元のテンソルを書き換えても、保つ姿勢が変わらないようにするため。
+        返す目標のテンソルは、受け取り側で書き換えないこと。
+        """
         self._timing = timing
-        self._default = default_joint_targets
+        self._default = default_joint_targets.clone()
         self._lock = threading.Lock()
         self._targets: dict[int, torch.Tensor] = {}
         self._episode_start_ns = 0

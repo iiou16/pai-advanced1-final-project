@@ -14,6 +14,8 @@ from cooperative_go2.entities.rigid_body_pose import RigidBodyPose
 from cooperative_go2.interface_adapters.config_loader import load_push_training_settings
 from cooperative_go2.use_cases.joint_target_scheduler import JointTargetScheduler, JointTargetTiming, TargetSelection
 from cooperative_go2.use_cases.ros_push_trial import (
+    InvalidPushTrialTimingError,
+    NoJointTargetsAppliedError,
     PushTrialPorts,
     PushTrialRunner,
     PushTrialTiming,
@@ -40,9 +42,15 @@ class FakeWorld:
         self.roll_deg = 0.0
         self.applied: list[torch.Tensor] = []
         self.steps = 0
+        # 試行の始めから数えた物理ステップの数 → そのステップの後の箱の位置
+        self.box_path: dict[int, tuple[float, float]] = {}
+        # 発散を報告する、試行の始めから数えた物理ステップの番号（1 始まり）
+        self.diverged_steps: set[int] = set()
+        self._trial_steps = 0
 
     def reset(self, layout: PushLayout, dof_pos: torch.Tensor) -> None:
         self.box_xy = tuple(layout.box_xy_m[0].tolist())
+        self._trial_steps = 0
 
     def read(self) -> PushWorldState:
         go2 = Go2State(
@@ -64,9 +72,12 @@ class FakeWorld:
 
     def step(self) -> None:
         self.steps += 1
+        self._trial_steps += 1
+        if self._trial_steps in self.box_path:
+            self.box_xy = self.box_path[self._trial_steps]
 
     def diverged(self) -> bool:
-        return False
+        return self._trial_steps in self.diverged_steps
 
 
 class EchoGaitPublisher:
@@ -75,10 +86,13 @@ class EchoGaitPublisher:
     def __init__(self, scheduler: JointTargetScheduler) -> None:
         self.scheduler = scheduler
         self.stamps: list[int] = []
+        # この時刻より後の状態には目標を返さない（歩行方策のノードが止まったことにする）。None なら常に返す
+        self.silent_after_ns: int | None = None
 
     def publish(self, stamp_ns: int, state: PushWorldState) -> None:
         self.stamps.append(stamp_ns)
-        self.scheduler.receive(stamp_ns, torch.full((1, 12), float(stamp_ns)))
+        if self.silent_after_ns is None or stamp_ns <= self.silent_after_ns:
+            self.scheduler.receive(stamp_ns, torch.full((1, 12), float(stamp_ns)))
 
 
 class RecordingPeers:
@@ -183,3 +197,73 @@ def test_tilted_robot_ends_trial_as_fall(harness: Harness) -> None:
     assert record.result.termination_reason is PushTerminationReason.FALL
     assert record.result.falls == 1
     assert record.result.high_level_steps == 1
+
+
+def test_trial_times_out_when_box_never_reaches_goal(harness: Harness, task: PushTaskConfig) -> None:
+    record = harness.runner.run_trial(0, _layout((1.0, 0.0)), torch.zeros(1, 12))
+
+    assert record.result.termination_reason is PushTerminationReason.TIME_OUT
+    assert record.result.high_level_steps == task.episode.max_episode_length_steps()
+
+
+def test_box_leaving_arena_ends_trial_as_out_of_bounds(harness: Harness) -> None:
+    harness.world.box_path = {GAIT_STEPS * 2: (100.0, 0.0)}
+
+    record = harness.runner.run_trial(0, _layout((1.0, 0.0)), torch.zeros(1, 12))
+
+    assert record.result.termination_reason is PushTerminationReason.OUT_OF_BOUNDS
+    assert record.result.high_level_steps == 2
+
+
+def test_divergence_in_middle_of_high_level_period_ends_trial(harness: Harness) -> None:
+    # 高レベル方策の 1 周期（5 物理ステップ）の途中の 2 ステップ目だけ発散を報告する
+    harness.world.diverged_steps = {GAIT_STEPS + 2}
+
+    record = harness.runner.run_trial(0, _layout((1.0, 0.0)), torch.zeros(1, 12))
+
+    assert record.result.termination_reason is PushTerminationReason.SIM_DIVERGED
+    assert record.result.high_level_steps == 2
+
+
+def test_success_hold_restarts_when_box_leaves_goal(harness: Harness, task: PushTaskConfig) -> None:
+    required = task.required_hold_steps()
+    # 必要な数の 1 つ手前（required - 1 周期）まで目標領域に入れ、required 周期目の終わりに外へ出し、
+    # 次の周期の終わりにまた入れる。入れ直してから required 周期続けて初めて成功する
+    leave_at = required * GAIT_STEPS
+    harness.world.box_path = {leave_at: (1.0, 0.0), leave_at + GAIT_STEPS: GOAL_XY}
+
+    record = harness.runner.run_trial(0, _layout(GOAL_XY), torch.zeros(1, 12))
+
+    assert record.result.termination_reason is PushTerminationReason.SUCCESS
+    assert record.result.high_level_steps == required + required
+
+
+def test_second_trial_counts_high_level_steps_from_zero(harness: Harness, task: PushTaskConfig) -> None:
+    first = harness.runner.run_trial(0, _layout(GOAL_XY), torch.zeros(1, 12))
+    second = harness.runner.run_trial(1, _layout(GOAL_XY), torch.zeros(1, 12))
+
+    assert first.result.high_level_steps == second.result.high_level_steps == task.required_hold_steps()
+
+
+def test_gait_node_loss_holds_default_pose_and_is_counted_as_stale(harness: Harness) -> None:
+    start_ns = DT_NS
+    harness.publisher.silent_after_ns = start_ns + 10 * DT_NS
+
+    record = harness.runner.run_trial(0, _layout(GOAL_XY), torch.zeros(1, 12))
+
+    assert record.target_selections[TargetSelection.STALE] > 0
+    assert torch.equal(harness.world.applied[-1], DEFAULT_TARGETS)
+    assert max(record.target_delay_steps) <= 5
+
+
+def test_trial_without_any_gait_target_is_an_error(harness: Harness) -> None:
+    harness.publisher.silent_after_ns = 0
+
+    with pytest.raises(NoJointTargetsAppliedError):
+        harness.runner.run_trial(0, _layout(GOAL_XY), torch.zeros(1, 12))
+
+
+@pytest.mark.parametrize("control_dt_ns,gait_steps", [(0, 5), (DT_NS, 0)], ids=["zero_dt", "zero_gait_steps"])
+def test_invalid_trial_timing_is_rejected(control_dt_ns: int, gait_steps: int) -> None:
+    with pytest.raises(InvalidPushTrialTimingError):
+        PushTrialTiming(control_dt_ns, gait_steps)

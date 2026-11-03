@@ -2,7 +2,7 @@
 
 import pytest
 
-from cooperative_go2.use_cases.stamp_aligner import StampAligner, UnknownSourceError
+from cooperative_go2.use_cases.stamp_aligner import InvalidStampAlignerError, StampAligner, UnknownSourceError
 
 SOURCES = ("a", "b")
 
@@ -47,3 +47,34 @@ def test_pending_stamps_beyond_limit_are_dropped_oldest_first(aligner: StampAlig
 def test_unknown_source_is_rejected(aligner: StampAligner[str]) -> None:
     with pytest.raises(UnknownSourceError):
         aligner.put("c", 10, "c10")
+
+
+def test_value_older_than_popped_stamp_is_dropped(aligner: StampAligner[str]) -> None:
+    aligner.put("a", 20, "a20")
+    aligner.put("b", 20, "b20")
+    assert aligner.pop_latest_complete_or_none() is not None
+
+    aligner.put("a", 10, "a10")
+    aligner.put("b", 10, "b10")
+
+    assert aligner.pop_latest_complete_or_none() is None
+
+
+def test_same_stamp_and_source_keeps_latest_value(aligner: StampAligner[str]) -> None:
+    aligner.put("a", 10, "first")
+    aligner.put("a", 10, "second")
+    aligner.put("b", 10, "b10")
+
+    aligned = aligner.pop_latest_complete_or_none()
+
+    assert aligned is not None and aligned.values["a"] == "second"
+
+
+@pytest.mark.parametrize(
+    "sources,max_pending",
+    [((), 3), (("a", "a"), 3), (("a", "b"), 0)],
+    ids=["no_sources", "duplicated_sources", "zero_pending"],
+)
+def test_invalid_aligner_is_rejected(sources: tuple[str, ...], max_pending: int) -> None:
+    with pytest.raises(InvalidStampAlignerError):
+        StampAligner(sources, max_pending)

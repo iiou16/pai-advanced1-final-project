@@ -8,6 +8,7 @@ import threading
 import time
 
 from action_msgs.msg import GoalStatus
+from action_msgs.srv import CancelGoal
 from geometry_msgs.msg import Point
 from go2_interfaces.action import ClearCorridor
 from go2_interfaces.msg import ContactState
@@ -55,6 +56,8 @@ from cooperative_go2.use_cases.ros_push_trial import PushWorldState
 
 # 方策のノードの配信が見えるかを確かめる実時間の間隔 [s]
 PEER_DISCOVERY_POLL_S = 0.1
+# 取り消しの応答のうち、依頼が残っていないことを表すもの（取り消した・取り消す前に終わっていた）
+ACCEPTED_CANCEL_RETURN_CODES = frozenset({CancelGoal.Response.ERROR_NONE, CancelGoal.Response.ERROR_GOAL_TERMINATED})
 TERMINAL_GOAL_STATUSES = frozenset({GoalStatus.STATUS_SUCCEEDED, GoalStatus.STATUS_CANCELED, GoalStatus.STATUS_ABORTED})
 
 
@@ -186,15 +189,23 @@ class RosPushTaskPeers:
 
         Raises:
             PeerNodeTimeoutError: 高レベル方策のノードが居るのに、時間内に応答が無い。
+            PeerNodeRejectedError: 依頼が試行の途中で中断（ABORTED）された、または取り消しを断られた。
+                高レベル方策のノードの処理が失敗して指令が止まると、試行の結果が「止まった」ことと区別できなくなるため。
         """
         handle = self._goal_handle
         self._goal_handle = None
-        if handle is None or self._goal_status in TERMINAL_GOAL_STATUSES:
+        if handle is None:
+            return
+        if self._goal_status == GoalStatus.STATUS_ABORTED:
+            raise PeerNodeRejectedError("高レベル方策のノードの依頼が試行の途中で中断（ABORTED）された")
+        if self._goal_status in TERMINAL_GOAL_STATUSES:
             return
         if not self._task_client.server_is_ready():
             self._node.get_logger().warning("高レベル方策のノードが居ないため、目標を取り消さずに試行を終える")
             return
-        self._wait(handle.cancel_goal_async(), "目標の取り消し")
+        response = self._wait(handle.cancel_goal_async(), "目標の取り消し")
+        if response.return_code not in ACCEPTED_CANCEL_RETURN_CODES:
+            raise PeerNodeRejectedError(f"高レベル方策のノードが目標の取り消しを断った（return_code={response.return_code}）")
 
     def _wait(self, future: Future, what: str) -> object:
         done = threading.Event()

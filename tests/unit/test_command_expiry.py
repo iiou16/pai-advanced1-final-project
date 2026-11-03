@@ -14,8 +14,19 @@ EXPIRY_NS = 100
 
 @pytest.mark.parametrize(
     "command_stamp_ns,now_ns,expected",
-    [(1000, 1000, True), (1000, 1100, True), (1000, 1101, False), (1050, 1000, True)],
-    ids=["same_time", "at_expiry", "just_after_expiry", "newer_than_receiver"],
+    [
+        (1000, 1000, True),
+        (1000, 1100, True),
+        (1000, 1101, False),
+        (1050, 1000, True),
+        (1100, 1000, True),
+        (1101, 1000, False),
+        (10**15, 1000, False),
+    ],
+    ids=[
+        "same_time", "at_expiry", "just_after_expiry", "newer_than_receiver", "newer_at_expiry",
+        "newer_beyond_expiry", "far_future",
+    ],
 )
 def test_freshness_boundary(command_stamp_ns: int, now_ns: int, expected: bool) -> None:
     assert is_command_fresh(command_stamp_ns, now_ns, EXPIRY_NS) is expected

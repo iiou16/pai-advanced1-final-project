@@ -1,7 +1,7 @@
-"""ROS 2 のシミュレーションノード。Genesis のシーンを進める唯一のプロセス（要件 5.2）。
+"""ROS 2 のシミュレーションノード。Genesis のシーンを進める唯一のプロセス。
 
 /clock・Go2 の関節と胴体・箱・接触・TF を配信し、歩行方策のノードの関節目標を受けて PD 制御する。
-試行ごとに歩行方策のノードをリセットし、高レベル方策のノードに目標を依頼する（P3 では依頼者を兼ねる）。
+試行ごとに歩行方策のノードをリセットし、高レベル方策のノードに目標を依頼する（1 台の構成では依頼者を兼ねる）。
 成功と終了はシミュレーションの真値で判定し、学習環境での評価（go2-evaluate-push）と同じ形式で記録する。
 
 起動例（launch から起動する。ロボットと同じ Namespace にする）:
@@ -9,7 +9,7 @@
         --run-name ros2-wide60-seed2001 --video false --ros-args -r __ns:=/go2_a -r __node:=genesis_sim -p use_sim_time:=true
 
 結果は outputs/ros2_eval/<run-name>/ に trials.csv・summary.json（go2-evaluate-push と同じ形式）、
-ros2_metrics.json（関節目標の遅れ・実時間比）、--video true なら video.mp4 を保存する。保存先が既にあれば止まる。
+ros2_metrics.json（適用した関節目標の遅れ・往復の遅延・実時間比）、--video true なら video.mp4 を保存する。保存先が既にあれば止まる。
 """
 
 import argparse
@@ -74,7 +74,13 @@ from cooperative_go2.interface_adapters.ros2_sim_ports import (
     subscribe_joint_targets,
 )
 from cooperative_go2.use_cases.joint_target_scheduler import JointTargetScheduler, JointTargetTiming
-from cooperative_go2.use_cases.ros_push_trial import PushTrialPorts, PushTrialRecord, PushTrialRunner, PushTrialTiming
+from cooperative_go2.use_cases.ros_push_trial import (
+    NoJointTargetsAppliedError,
+    PushTrialPorts,
+    PushTrialRecord,
+    PushTrialRunner,
+    PushTrialTiming,
+)
 from cooperative_go2.use_cases.simulation_errors import SimulationSetupError
 
 NODE_NAME = "genesis_sim"
@@ -90,6 +96,7 @@ EXIT_SIMULATION_SETUP_FAILED = 4
 EXIT_PEER_NODE_FAILED = 5
 EXIT_GIT_UNAVAILABLE = 6
 EXIT_VIDEO_RECORDING_FAILED = 7
+EXIT_ROS_EXECUTOR_FAILED = 8
 
 logger = logging.getLogger(__name__)
 
@@ -132,13 +139,58 @@ def _load_inputs(config_path: Path) -> _Inputs:
     return _Inputs(settings, push, scene, gait, current_commit_sha())
 
 
+class ExecutorThreadFailedError(RuntimeError):
+    """ROS 2 の受信を処理するスレッドが例外で止まったことを表す。関節目標や応答が届かなくなる。"""
+
+
+class _ExecutorThread:
+    """ROS 2 の受信の処理を別のスレッドで回し、そのスレッドが例外で止まったことを試行のスレッドに伝える。"""
+
+    def __init__(self, node: Node) -> None:
+        self.executor = MultiThreadedExecutor()
+        self.executor.add_node(node)
+        self._error: Exception | None = None
+        threading.Thread(target=self._spin, daemon=True).start()
+
+    def _spin(self) -> None:
+        try:
+            self.executor.spin()
+        except Exception as error:
+            # このスレッドの最上位。例外を握りつぶさず保持し、試行のスレッドが raise_if_failed() で送出する
+            self._error = error
+
+    def find_error_or_none(self) -> Exception | None:
+        """受信のスレッドを止めた例外を返す。止まっていなければ None。"""
+        return self._error
+
+    def raise_if_failed(self) -> None:
+        """受信のスレッドが例外で止まっていれば ExecutorThreadFailedError を送出する。"""
+        if self._error is not None:
+            raise ExecutorThreadFailedError(f"ROS 2 の受信のスレッドが止まった: {self._error!r}") from self._error
+
+
+class _HealthCheckedPacer:
+    """物理ステップの前に、ROS 2 の受信のスレッドが動いていることを確かめてから実時間の間隔を整える。"""
+
+    def __init__(self, pacer: RealTimePacer, executor_thread: _ExecutorThread) -> None:
+        self._pacer = pacer
+        self._executor_thread = executor_thread
+
+    def wait_for_next_step(self) -> None:
+        """受信のスレッドが止まっていれば ExecutorThreadFailedError を送出し、そうでなければ次のステップまで待つ。"""
+        self._executor_thread.raise_if_failed()
+        self._pacer.wait_for_next_step()
+
+
 @dataclass(frozen=True)
 class _TrialsOutcome:
     records: list[PushTrialRecord]
     latency_probe: RoundTripLatencyProbe
 
 
-def _run_trials(args: argparse.Namespace, inputs: _Inputs, node: Node, output_dir: Path) -> _TrialsOutcome:
+def _run_trials(
+    args: argparse.Namespace, inputs: _Inputs, node: Node, executor_thread: _ExecutorThread, output_dir: Path
+) -> _TrialsOutcome:
     task = inputs.push.task
     gait_env = inputs.gait.env
     video = None
@@ -162,7 +214,7 @@ def _run_trials(args: argparse.Namespace, inputs: _Inputs, node: Node, output_di
         world=world,
         publisher=RosWorldStatePublisher(node, latency_probe),
         peers=peers,
-        pacer=RealTimePacer(gait_env.control_dt_s, runtime.max_real_time_factor),
+        pacer=_HealthCheckedPacer(RealTimePacer(gait_env.control_dt_s, runtime.max_real_time_factor), executor_thread),
         wall_clock=time.perf_counter,
     )
     trial_timing = PushTrialTiming(control_dt_ns, task.gait_steps_per_high_level_step(gait_env.control_dt_s))
@@ -238,13 +290,6 @@ def _metrics(args: argparse.Namespace, settings: Ros2PushSettings, outcome: _Tri
     }
 
 
-def _spin_in_background(node: Node) -> MultiThreadedExecutor:
-    executor = MultiThreadedExecutor()
-    executor.add_node(node)
-    threading.Thread(target=executor.spin, daemon=True).start()
-    return executor
-
-
 def main(argv: list[str] | None = None) -> None:
     """試行を続けて行い、記録を保存する。失敗の種類ごとに非ゼロの終了コードで終わる。"""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -270,21 +315,29 @@ def main(argv: list[str] | None = None) -> None:
     DEVICES[args.device](args.seed)
     rclpy.init(args=raw_argv)
     node = Node(NODE_NAME)
-    executor = _spin_in_background(node)
+    executor_thread = _ExecutorThread(node)
     left = f"（保存先 {output_dir} は途中のまま残っている。削除してから再実行する）"
     try:
-        outcome = _run_trials(args, inputs, node, output_dir)
+        outcome = _run_trials(args, inputs, node, executor_thread, output_dir)
     except SimulationSetupError as error:
         logger.error("%s%s", error, left)
         sys.exit(EXIT_SIMULATION_SETUP_FAILED)
-    except (PeerNodeTimeoutError, PeerNodeRejectedError) as error:
+    except (PeerNodeTimeoutError, PeerNodeRejectedError, NoJointTargetsAppliedError) as error:
+        # 応答が来ない原因が、自ノードの受信のスレッドの停止である場合はそれを伝え、終了コードも分ける
+        executor_error = executor_thread.find_error_or_none()
+        if executor_error is not None:
+            logger.error("ROS 2 の受信のスレッドが止まった: %r（%s）%s", executor_error, error, left)
+            sys.exit(EXIT_ROS_EXECUTOR_FAILED)
         logger.error("方策のノードとのやり取りに失敗した: %s%s", error, left)
         sys.exit(EXIT_PEER_NODE_FAILED)
+    except ExecutorThreadFailedError as error:
+        logger.error("%s%s", error, left)
+        sys.exit(EXIT_ROS_EXECUTOR_FAILED)
     except VideoRecordingError as error:
         logger.error("%s%s", error, left)
         sys.exit(EXIT_VIDEO_RECORDING_FAILED)
     finally:
-        executor.shutdown()
+        executor_thread.executor.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()
 
