@@ -1,4 +1,4 @@
-"""箱押しの 1 試行（エピソード）の結果と、複数の試行をまとめた評価指標（要件 9.3）。"""
+"""箱押しの 1 試行（エピソード）の結果と、複数の試行をまとめた評価指標。"""
 
 import math
 from collections.abc import Sequence
@@ -97,7 +97,7 @@ class PushEpisodeResult:
 
 @dataclass(frozen=True)
 class PushTrialSummary:
-    """複数の試行をまとめた評価指標（要件 9.3。通路開通率は S1 に通路が無いので扱わない）。
+    """複数の試行をまとめた評価指標。
 
     Attributes:
         num_trials: 試行の数。

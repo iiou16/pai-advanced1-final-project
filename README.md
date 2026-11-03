@@ -52,6 +52,61 @@ uv run --frozen go2-evaluate-gait --run-dir outputs/gait/gait-command-tracking -
 - 合格基準: `configs/gait_eval.yaml` の停止（`stop`）・前進（`forward`）・左右のその場旋回（`turn_in_place_left` / `turn_in_place_right`）の各区間で、水平速度の追従誤差の平均が 0.10 m/s 以下、ヨー角速度の追従誤差の平均が 0.15 rad/s 以下、転倒率が 5 % 以下であること。学習に使っていないシードで測った実測値（それぞれ最大 0.032 m/s・0.038 rad/s・0 %）に約 3 倍の余裕を持たせた値。
 - 学習済みの方策を他の処理から使うときは、`interface_adapters.gait_checkpoint.load_gait_controller` で推論器（`GaitController`）を読み込む。自己受容の状態と速度指令から、12 関節の目標角（関節の順序は `GO2_JOINT_NAMES`）を返す。
 
+## 学習済みモデルの取得
+
+学習済みの歩行方策と箱押しの方策は、GitHub の Release（タグ `v0.2.0`）で配布している。学習をせずに評価だけを再現するときは、次の手順で `outputs/` に置く。
+
+```bash
+# Release の添付ファイルを取得する（gh を使わない場合は Release のページから同じファイルをダウンロードする）
+gh release download v0.2.0 -R iiou16/pai-advanced1-final-project -p '*.tar.gz' -D outputs/release
+
+# 歩行方策（model_1500.pt と学習時の設定 gait.yaml）→ outputs/gait/gait-command-tracking/
+mkdir -p outputs/gait outputs/push
+tar -xzf outputs/release/gait-command-tracking.tar.gz -C outputs/gait
+
+# 箱押しの方策（model_200.pt と学習時の設定 push_single.yaml・scene.yaml）→ outputs/push/push-stage2-wide60/
+tar -xzf outputs/release/push-stage2-wide60.tar.gz -C outputs/push
+```
+
+- 歩行方策は `configs/push_single.yaml` の `gait_policy`（`outputs/gait/gait-command-tracking` の `model_1500.pt`）から読み込む。
+- 箱押しの方策は、下の評価のコマンドで `--policy-run-dir outputs/push/push-stage2-wide60 --checkpoint 200` を指定して使う。
+
+## 箱押しの高レベル方策の学習と評価
+
+学習済みの歩行方策を固定し、その上で 1 台の Go2 が軽量の箱（0.4 × 0.4 × 0.3 m、2 kg）を目標領域へ押す高レベル方策を PPO で学習する。高レベル方策は 10 Hz で速度指令 `[vx, vy, yaw_rate]` を出し、その 1 ステップの間に歩行方策を 50 Hz で 5 回呼ぶ。設定は `configs/push_single.yaml`（学習環境・規則ベースの制御・PPO）と `configs/scenes/s1_push.yaml`（箱と物理エンジンの設定）にまとめ、読み込み時に検証する。歩行方策は `gait_policy.run_dir` の学習結果を使う（歩行方策の学習を先に済ませておく）。
+
+```bash
+source scripts/setup/env.sh
+
+# シーンの物理の確認（箱が置かれる・静止摩擦で止まる・押すと滑る・離すと止まる・床との接触が途切れない。CPU で動く）
+uv run --frozen python scripts/p2_scene_check/check_s1_push_scene.py
+
+# 学習（出力: outputs/push/<run-name>/。チェックポイント（50 反復ごと）・TensorBoard のログ・設定の写し）
+#   目標が箱の正面にある配置（configs/push_single.yaml）と、目標の方向を ±60° に広げた配置
+#   （configs/push_single_wide.yaml）の 2 通りがある。配布しているモデルは後者の 200 反復目（model_200.pt）
+uv run --frozen go2-train-push --config configs/push_single_wide.yaml --run-name push-stage2-wide60
+
+# 評価（出力: outputs/push_eval/<run-name>/。--video で環境 0 を追従した評価動画も撮る）
+#   規則ベースの制御（比較の基準）
+uv run --frozen go2-evaluate-push --config configs/push_single_wide.yaml --algorithm rule_based \
+    --num-envs 64 --seed 2001 --device cuda --run-name e1-wide60-seed2001
+#   学習済みの方策
+uv run --frozen go2-evaluate-push --config configs/push_single_wide.yaml --algorithm policy \
+    --policy-run-dir outputs/push/push-stage2-wide60 --checkpoint 200 \
+    --num-envs 64 --seed 2001 --device cuda --run-name e2-wide60-seed2001
+
+# 学習曲線を CSV と PNG に書き出す
+uv run --frozen python scripts/p2_materials/export_training_curves.py outputs/push/push-stage2-wide60 outputs/materials/training
+```
+
+- 評価の配置は `--config` で選ぶ。目標が正面なら `configs/push_single.yaml`、±60° なら `configs/push_single_wide.yaml`。評価のシードは 2001・2002・2003 を使った（学習のシードとは別）。
+
+- 評価は並列環境ごとに最初の 1 試行だけを数える（早く終わる試行ほど多く数える偏りを避けるため）。結果は試行ごとに 1 行の `trials.csv`（成功・終了理由・所要時間・箱の移動量と回転・転倒・物理ステップ数・実時間など）と、条件と評価指標（成功率・目標方向の移動量・最終目標距離・箱の回転角・成功までの時間・転倒率）の `summary.json` に保存する。
+- 学習済みの方策を評価するときは、観測の正規化係数・高レベル方策の周期・指令の範囲・歩行方策が学習時と同じでなければ止まる。配置（目標の距離・方向）や成功判定は、汎化を確かめるために変えてよい。
+- 成功は、箱の中心が目標領域（半径 0.3 m の円）に入った状態を 1.0 秒続けること。終了理由は、成功・時間切れ（20 秒）・転倒・シーン外への離脱・物理計算の発散のいずれか。
+- 箱を置くシーンでは、物理エンジンの摩擦円錐を `elliptic` にしている。Genesis の既定の `pyramidal` では、滑っている箱に床から押し上げる誤った力が生じ、箱が浮いたり飛んで転がったりする。歩行方策は `pyramidal` で学習したものだが、`elliptic` でも合格基準を満たすことを確かめている。比較の動画は `scripts/p2_scene_check/record_friction_cone_demo.py` で撮れる。
+- 学習ログは `uv run --frozen tensorboard --logdir outputs/push` で見る。
+
 ## テスト
 
 ```bash

@@ -35,10 +35,12 @@ class PushVideoSpec:
 
     Attributes:
         camera: オフスクリーンカメラ。
+        lookat_offset_m: Go2 の胴体の初期位置から注視点までの相対位置 (x, y, z) [m]。0 なら Go2 を見る。
         goal_radius_m: 目標領域を示す円板の半径 [m]。物理には関わらない（衝突しない）。
     """
 
     camera: CameraSpec
+    lookat_offset_m: tuple[float, float, float]
     goal_radius_m: float
 
 
@@ -169,7 +171,7 @@ def _create_and_build_scene(
             ),
             surface=gs.surfaces.Default(color=GOAL_MARKER_COLOR_RGB),
         )
-        camera = _add_camera(scene, request.video.camera, robot_config.base_init_pos_m)
+        camera = _add_camera(scene, request.video, robot_config.base_init_pos_m)
     scene.build(n_envs=request.num_envs)
     return PushScene(
         ground_and_robot=FlatScene(scene=scene, robot=robot, camera=camera),
@@ -179,7 +181,9 @@ def _create_and_build_scene(
     )
 
 
-def _add_camera(scene: gs.Scene, spec: CameraSpec, robot_pos: tuple[float, ...]) -> object:
+def _add_camera(scene: gs.Scene, video: PushVideoSpec, robot_pos: tuple[float, ...]) -> object:
     # 姿勢は build 前に add_camera で渡す（build 後に位置と注視点だけを渡すと、上方向が引き継がれてカメラが傾く）
+    spec = video.camera
     position = tuple(axis + offset for axis, offset in zip(robot_pos, spec.offset_m, strict=True))
-    return scene.add_camera(res=spec.resolution, pos=position, lookat=robot_pos, fov=spec.fov_deg, GUI=False)
+    lookat = tuple(axis + offset for axis, offset in zip(robot_pos, video.lookat_offset_m, strict=True))
+    return scene.add_camera(res=spec.resolution, pos=position, lookat=lookat, fov=spec.fov_deg, GUI=False)

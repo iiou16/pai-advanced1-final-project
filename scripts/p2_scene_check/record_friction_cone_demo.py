@@ -1,6 +1,6 @@
 """摩擦円錐のモデル（pyramidal / elliptic）による、押された箱の動きの違いを動画に撮る（レポート・提出動画の素材）。
 
-シーン S1_push の箱に、静止摩擦力の 2 倍の水平な力を 1 秒かけてから離す。Go2 は既定姿勢で立たせておく。
+シーン S1_push の箱に、静止摩擦力の 2 倍の水平な力を 0.6 秒かけてから離す。Go2 は既定姿勢で立たせておく。
 pyramidal（Genesis の既定）では箱が浮いて飛び、転がる。elliptic では床を滑って止まる。
 
 実行: uv run python scripts/p2_scene_check/record_friction_cone_demo.py <pyramidal|elliptic> <出力する mp4>
@@ -26,11 +26,12 @@ SEED = 0
 NUM_ENVS = 1
 GRAVITY_MPS2 = 9.81
 SETTLE_S = 0.5
-PUSH_S = 1.0
+PUSH_S = 0.6
 RELEASE_S = 2.0
 PUSH_FORCE_RATIO = 2.0
-# Go2（立ったまま動かない）の斜め横から、箱が押される方向（+x）の数 m 先まで入るように広く撮る
-DEMO_CAMERA = CameraSpec(resolution=(960, 540), offset_m=(2.5, -6.5, 1.6), fov_deg=70.0)
+# 箱の進路（x = 1〜5 m 付近）の真横から、進路の中央を見て撮る。押す時間は、elliptic で箱が画面の中で止まる長さにする
+DEMO_CAMERA = CameraSpec(resolution=(960, 540), offset_m=(2.5, -4.0, 1.2), fov_deg=55.0)
+DEMO_LOOKAT_OFFSET_M = (2.5, 0.0, -0.27)
 # この動画には目標領域は無いので、目標を示す円板は見えない大きさにする
 HIDDEN_GOAL_MARKER_RADIUS_M = 0.001
 
@@ -41,7 +42,7 @@ def main() -> None:
     settings = load_push_scene_settings(SCENE_CONFIG_PATH)
     settings = dataclasses.replace(settings, genesis=dataclasses.replace(settings.genesis, friction_cone=cone))
     init_genesis_on_cuda(SEED)
-    video = PushVideoSpec(DEMO_CAMERA, HIDDEN_GOAL_MARKER_RADIUS_M)
+    video = PushVideoSpec(DEMO_CAMERA, DEMO_LOOKAT_OFFSET_M, HIDDEN_GOAL_MARKER_RADIUS_M)
     scene = build_push_scene(gait, settings, PushSceneRequest(NUM_ENVS, video=video))
     body = GenesisGo2Body(scene.robot, gait.robot)
     camera = scene.ground_and_robot.require_camera()

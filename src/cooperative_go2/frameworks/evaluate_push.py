@@ -7,7 +7,7 @@
         --policy-run-dir outputs/push/push-stage1 --checkpoint 500 \\
         --num-envs 64 --seed 2001 --device cuda --run-name e2-stage1 --video
 
-結果は outputs/push_eval/<run-name>/ に、trials.csv（試行ごとに 1 行、要件 9.2 の列）と summary.json
+結果は outputs/push_eval/<run-name>/ に、trials.csv（試行ごとに 1 行）と summary.json
 （条件と評価指標）として保存する。--video を付けると、環境 0 を追従した評価動画（video.mp4）も撮る。
 保存先が既にあれば上書きせずに止まる。評価の条件（配置・成功判定など）は --config から取る。
 --box-mass-kg を付けると、シーンの設定の箱の質量だけを置き換えて評価する（箱の質量を決める実験用）。
@@ -64,8 +64,9 @@ SCENE_ID = "S1_push"
 ALGORITHM_RULE_BASED = "rule_based"
 ALGORITHM_POLICY = "policy"
 DEVICES = {"cuda": init_genesis_on_cuda, "cpu": init_genesis_on_cpu}
-# Go2 と前方の箱・目標が入るよう、斜め後ろ上から撮る
+# Go2 と前方の箱・目標が入るよう、斜め後ろ上から Go2 を見て撮る
 VIDEO_CAMERA = CameraSpec(resolution=(960, 540), offset_m=(-1.2, -2.6, 1.6), fov_deg=50.0)
+VIDEO_LOOKAT_OFFSET_M = (0.0, 0.0, 0.0)
 EXIT_INVALID_INPUT = 2
 EXIT_OUTPUT_EXISTS = 3
 EXIT_SIMULATION_SETUP_FAILED = 4
@@ -137,7 +138,7 @@ def _evaluate(
     DEVICES[args.device](args.seed)
     source = _command_source(args, settings)
     generator = make_seeded_generator(args.seed)
-    video = PushVideoSpec(VIDEO_CAMERA, task.success.goal_radius_m) if args.video else None
+    video = PushVideoSpec(VIDEO_CAMERA, VIDEO_LOOKAT_OFFSET_M, task.success.goal_radius_m) if args.video else None
     simulation = GenesisPushSimulation.build(gait, scene, PushSceneRequest(args.num_envs, video))
     controller = load_gait_controller(run_dir, settings.gait_policy.checkpoint, args.num_envs, gs.device)
     env = Go2PushEnv(PushEnvSetup(task, gait, scene.box.initial_xy_m, generator), simulation, controller)
