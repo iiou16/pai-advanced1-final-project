@@ -1,18 +1,23 @@
 import pytest
 import torch
 
-from cooperative_go2.entities.episode_reward_tracker import EpisodeRewardTracker
+from cooperative_go2.entities.episode_reward_tracker import EpisodeRewardTracker, EpisodeTrackingSpec
 from cooperative_go2.entities.gait_reward import GAIT_REWARD_TERM_NAMES, GaitRewardTerms
 from cooperative_go2.entities.gait_termination import TerminationReason
 
 CONTROL_DT_S = 0.5
+SPEC = EpisodeTrackingSpec(
+    term_names=GAIT_REWARD_TERM_NAMES, termination_reasons=TerminationReason, step_seconds=CONTROL_DT_S
+)
 
 
 def _terms(values: list[float], **overrides: list[float]) -> GaitRewardTerms:
     """すべての項を values にし、overrides で指定した項だけ別の値にした報酬の項。"""
-    return GaitRewardTerms(
-        **{name: torch.tensor(overrides.get(name, values)) for name in GAIT_REWARD_TERM_NAMES}
-    )
+    return GaitRewardTerms(**{name: torch.tensor(overrides.get(name, values)) for name in GAIT_REWARD_TERM_NAMES})
+
+
+def _named_terms(values: list[float], **overrides: list[float]) -> dict[str, torch.Tensor]:
+    return _terms(values, **overrides).named()
 
 
 def _reasons(*reasons: TerminationReason) -> torch.Tensor:
@@ -20,8 +25,8 @@ def _reasons(*reasons: TerminationReason) -> torch.Tensor:
 
 
 def test_no_finished_episode_gives_none() -> None:
-    tracker = EpisodeRewardTracker(num_envs=2, control_dt_s=CONTROL_DT_S, device="cpu")
-    tracker.add_step(_terms([1.0, 1.0]))
+    tracker = EpisodeRewardTracker(SPEC, num_envs=2, device="cpu")
+    tracker.add_step(_named_terms([1.0, 1.0]))
 
     summary = tracker.summarize_completed_or_none(
         torch.tensor([False, False]), _reasons(TerminationReason.NONE, TerminationReason.NONE)
@@ -31,10 +36,10 @@ def test_no_finished_episode_gives_none() -> None:
 
 
 def test_reward_per_second_uses_each_episode_actual_length() -> None:
-    tracker = EpisodeRewardTracker(num_envs=2, control_dt_s=CONTROL_DT_S, device="cpu")
-    tracker.add_step(_terms([1.0, 1.0]))
+    tracker = EpisodeRewardTracker(SPEC, num_envs=2, device="cpu")
+    tracker.add_step(_named_terms([1.0, 1.0]))
     tracker.reset_where(torch.tensor([True, False]))
-    tracker.add_step(_terms([3.0, 1.0]))
+    tracker.add_step(_named_terms([3.0, 1.0]))
 
     summary = tracker.summarize_completed_or_none(
         torch.tensor([True, True]), _reasons(TerminationReason.TIME_OUT, TerminationReason.TIME_OUT)
@@ -46,8 +51,8 @@ def test_reward_per_second_uses_each_episode_actual_length() -> None:
 
 
 def test_each_term_is_summarized_separately() -> None:
-    tracker = EpisodeRewardTracker(num_envs=1, control_dt_s=CONTROL_DT_S, device="cpu")
-    tracker.add_step(_terms([0.0], tracking_ang_vel=[1.0], action_rate=[-2.0]))
+    tracker = EpisodeRewardTracker(SPEC, num_envs=1, device="cpu")
+    tracker.add_step(_named_terms([0.0], tracking_ang_vel=[1.0], action_rate=[-2.0]))
 
     summary = tracker.summarize_completed_or_none(torch.tensor([True]), _reasons(TerminationReason.FALL))
 
@@ -59,8 +64,8 @@ def test_each_term_is_summarized_separately() -> None:
 
 
 def test_summarizing_does_not_clear_the_sums() -> None:
-    tracker = EpisodeRewardTracker(num_envs=1, control_dt_s=CONTROL_DT_S, device="cpu")
-    tracker.add_step(_terms([1.0]))
+    tracker = EpisodeRewardTracker(SPEC, num_envs=1, device="cpu")
+    tracker.add_step(_named_terms([1.0]))
     done = torch.tensor([True])
     reasons = _reasons(TerminationReason.TIME_OUT)
 
@@ -72,10 +77,10 @@ def test_summarizing_does_not_clear_the_sums() -> None:
 
 
 def test_reset_discards_partial_episode_of_masked_envs_only() -> None:
-    tracker = EpisodeRewardTracker(num_envs=2, control_dt_s=CONTROL_DT_S, device="cpu")
-    tracker.add_step(_terms([10.0, 10.0]))
+    tracker = EpisodeRewardTracker(SPEC, num_envs=2, device="cpu")
+    tracker.add_step(_named_terms([10.0, 10.0]))
     tracker.reset_where(torch.tensor([True, False]))
-    tracker.add_step(_terms([1.0, 1.0]))
+    tracker.add_step(_named_terms([1.0, 1.0]))
 
     summary = tracker.summarize_completed_or_none(
         torch.tensor([True, False]), _reasons(TerminationReason.TIME_OUT, TerminationReason.NONE)
@@ -87,8 +92,8 @@ def test_reset_discards_partial_episode_of_masked_envs_only() -> None:
 
 
 def test_termination_fraction_counts_only_finished_envs() -> None:
-    tracker = EpisodeRewardTracker(num_envs=4, control_dt_s=CONTROL_DT_S, device="cpu")
-    tracker.add_step(_terms([0.0] * 4))
+    tracker = EpisodeRewardTracker(SPEC, num_envs=4, device="cpu")
+    tracker.add_step(_named_terms([0.0] * 4))
     reasons = _reasons(
         TerminationReason.FALL, TerminationReason.TIME_OUT, TerminationReason.FALL, TerminationReason.NONE
     )
@@ -102,8 +107,8 @@ def test_termination_fraction_counts_only_finished_envs() -> None:
 
 
 def test_log_keys_are_prefixed_by_kind() -> None:
-    tracker = EpisodeRewardTracker(num_envs=1, control_dt_s=CONTROL_DT_S, device="cpu")
-    tracker.add_step(_terms([0.0]))
+    tracker = EpisodeRewardTracker(SPEC, num_envs=1, device="cpu")
+    tracker.add_step(_named_terms([0.0]))
 
     summary = tracker.summarize_completed_or_none(torch.tensor([True]), _reasons(TerminationReason.TIME_OUT))
 

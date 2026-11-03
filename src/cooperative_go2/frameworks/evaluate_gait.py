@@ -40,7 +40,7 @@ from cooperative_go2.interface_adapters.genesis_video_recorder import GenesisVid
 from cooperative_go2.interface_adapters.rsl_rl_gait import (
     CheckpointLoadError,
     CheckpointNotFoundError,
-    RslRlGaitPolicy,
+    RslRlPolicy,
     load_rsl_rl_gait_policy,
 )
 from cooperative_go2.use_cases.evaluate_gait import (
@@ -75,7 +75,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 
 def _run_in_simulation(
-    plan: GaitEvaluationPlan, policy: RslRlGaitPolicy, video_store: FileGaitEvaluationStore | None
+    plan: GaitEvaluationPlan, policy: RslRlPolicy, video_store: FileGaitEvaluationStore | None
 ) -> tuple[ScenarioSummary, ...]:
     """シミュレーションを構築して評価シナリオを走らせる。video_store を渡すとシナリオごとの評価動画をそこに保存する。"""
     simulation = GenesisGaitSimulation.build(plan.config, VIDEO_CAMERA if video_store is not None else None)

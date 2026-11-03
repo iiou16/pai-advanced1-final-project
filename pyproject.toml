@@ -22,6 +22,8 @@ dependencies = [
 [project.scripts]
 go2-train-gait = "cooperative_go2.frameworks.train_gait:main"
 go2-evaluate-gait = "cooperative_go2.frameworks.evaluate_gait:main"
+go2-evaluate-push = "cooperative_go2.frameworks.evaluate_push:main"
+go2-train-push = "cooperative_go2.frameworks.train_push:main"
 
 [dependency-groups]
 dev = ["pytest"]

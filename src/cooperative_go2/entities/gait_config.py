@@ -5,43 +5,25 @@
 学習アルゴリズム（PPO）固有の設定はここに置かない。
 """
 
-import math
 from dataclasses import dataclass
 
+from cooperative_go2.entities.config_validation import (
+    ConfigValueChecker,
+    InvalidConfigError,
+    ceil_ratio,
+    is_integer_ratio,
+)
 from cooperative_go2.entities.go2 import Go2JointAngles
 
 QUATERNION_SIZE = 4
 POSITION_SIZE = 3
-# 周期の比が整数かを判定するときの許容誤差。0.02 のような 2 進で割り切れない値の丸め誤差を吸収する
-INTEGER_RATIO_TOLERANCE = 1e-9
 
 
-class InvalidGaitConfigError(ValueError):
+class InvalidGaitConfigError(InvalidConfigError):
     """歩行の設定値が不変条件（有限の値、正の値、範囲の上下関係、要素数など）を満たさないことを表す。"""
 
 
-def _require_finite(name: str, value: float) -> None:
-    # NaN は大小比較がすべて偽になり、正の値や範囲の検査をすり抜けるため、先に弾く
-    if not math.isfinite(value):
-        raise InvalidGaitConfigError(f"{name} は有限の値が必要: {value}")
-
-
-def _require_positive(name: str, value: float) -> None:
-    _require_finite(name, value)
-    if value <= 0:
-        raise InvalidGaitConfigError(f"{name} は正の値が必要: {value}")
-
-
-def _require_non_negative(name: str, value: float) -> None:
-    _require_finite(name, value)
-    if value < 0:
-        raise InvalidGaitConfigError(f"{name} は 0 以上が必要: {value}")
-
-
-def _require_probability(name: str, value: float) -> None:
-    _require_finite(name, value)
-    if not 0.0 <= value <= 1.0:
-        raise InvalidGaitConfigError(f"{name} は 0 以上 1 以下が必要: {value}")
+_check = ConfigValueChecker(InvalidGaitConfigError)
 
 
 @dataclass(frozen=True)
@@ -52,8 +34,8 @@ class ValueRange:
     high: float
 
     def __post_init__(self) -> None:
-        _require_finite("範囲の下限", self.low)
-        _require_finite("範囲の上限", self.high)
+        _check.finite("範囲の下限", self.low)
+        _check.finite("範囲の上限", self.high)
         if self.low > self.high:
             raise InvalidGaitConfigError(f"範囲の下限が上限より大きい: low={self.low} high={self.high}")
 
@@ -82,9 +64,9 @@ class VelocityCommandConfig:
     resampling_time_s: float
 
     def __post_init__(self) -> None:
-        _require_probability("command.zero_lin_vel_probability", self.zero_lin_vel_probability)
-        _require_probability("command.zero_yaw_rate_probability", self.zero_yaw_rate_probability)
-        _require_positive("command.resampling_time_s", self.resampling_time_s)
+        _check.unit_interval("command.zero_lin_vel_probability", self.zero_lin_vel_probability)
+        _check.unit_interval("command.zero_yaw_rate_probability", self.zero_yaw_rate_probability)
+        _check.positive("command.resampling_time_s", self.resampling_time_s)
 
 
 @dataclass(frozen=True)
@@ -107,8 +89,8 @@ class Go2RobotConfig:
     base_init_quat_wxyz: tuple[float, ...]
 
     def __post_init__(self) -> None:
-        _require_positive("robot.kp", self.kp)
-        _require_non_negative("robot.kd", self.kd)
+        _check.positive("robot.kp", self.kp)
+        _check.non_negative("robot.kd", self.kd)
         if len(self.base_init_pos_m) != POSITION_SIZE:
             raise InvalidGaitConfigError(f"robot.base_init_pos_m は 3 要素が必要: {self.base_init_pos_m}")
         if len(self.base_init_quat_wxyz) != QUATERNION_SIZE:
@@ -147,16 +129,16 @@ class GaitEnvConfig:
     reset_joint_pos_noise_rad: float
 
     def __post_init__(self) -> None:
-        _require_positive("env.num_envs", self.num_envs)
-        _require_positive("env.control_dt_s", self.control_dt_s)
-        _require_positive("env.substeps", self.substeps)
-        _require_positive("env.episode_length_s", self.episode_length_s)
-        _require_positive("env.action_scale", self.action_scale)
-        _require_positive("env.clip_actions", self.clip_actions)
-        _require_positive("env.termination_roll_deg", self.termination_roll_deg)
-        _require_positive("env.termination_pitch_deg", self.termination_pitch_deg)
-        _require_positive("env.max_collision_pairs", self.max_collision_pairs)
-        _require_non_negative("env.reset_joint_pos_noise_rad", self.reset_joint_pos_noise_rad)
+        _check.positive("env.num_envs", self.num_envs)
+        _check.positive("env.control_dt_s", self.control_dt_s)
+        _check.positive("env.substeps", self.substeps)
+        _check.positive("env.episode_length_s", self.episode_length_s)
+        _check.positive("env.action_scale", self.action_scale)
+        _check.positive("env.clip_actions", self.clip_actions)
+        _check.positive("env.termination_roll_deg", self.termination_roll_deg)
+        _check.positive("env.termination_pitch_deg", self.termination_pitch_deg)
+        _check.positive("env.max_collision_pairs", self.max_collision_pairs)
+        _check.non_negative("env.reset_joint_pos_noise_rad", self.reset_joint_pos_noise_rad)
 
 
 @dataclass(frozen=True)
@@ -169,10 +151,10 @@ class GaitObservationScales:
     dof_vel: float
 
     def __post_init__(self) -> None:
-        _require_positive("observation.lin_vel", self.lin_vel)
-        _require_positive("observation.ang_vel", self.ang_vel)
-        _require_positive("observation.dof_pos", self.dof_pos)
-        _require_positive("observation.dof_vel", self.dof_vel)
+        _check.positive("observation.lin_vel", self.lin_vel)
+        _check.positive("observation.ang_vel", self.ang_vel)
+        _check.positive("observation.dof_pos", self.dof_pos)
+        _check.positive("observation.dof_vel", self.dof_vel)
 
 
 @dataclass(frozen=True)
@@ -206,8 +188,8 @@ class GaitRewardConfig:
     scales: GaitRewardScales
 
     def __post_init__(self) -> None:
-        _require_positive("reward.tracking_sigma", self.tracking_sigma)
-        _require_positive("reward.base_height_target_m", self.base_height_target_m)
+        _check.positive("reward.tracking_sigma", self.tracking_sigma)
+        _check.positive("reward.base_height_target_m", self.base_height_target_m)
 
 
 @dataclass(frozen=True)
@@ -223,7 +205,7 @@ class GaitTrainingConfig:
     max_iterations: int
 
     def __post_init__(self) -> None:
-        _require_positive("training.max_iterations", self.max_iterations)
+        _check.positive("training.max_iterations", self.max_iterations)
 
 
 @dataclass(frozen=True)
@@ -238,8 +220,7 @@ class GaitConfig:
     training: GaitTrainingConfig
 
     def __post_init__(self) -> None:
-        steps_per_resample = self.command.resampling_time_s / self.env.control_dt_s
-        if abs(steps_per_resample - round(steps_per_resample)) > INTEGER_RATIO_TOLERANCE:
+        if not is_integer_ratio(self.command.resampling_time_s, self.env.control_dt_s):
             raise InvalidGaitConfigError(
                 f"command.resampling_time_s ({self.command.resampling_time_s}) は "
                 f"env.control_dt_s ({self.env.control_dt_s}) の整数倍が必要"
@@ -251,13 +232,4 @@ class GaitConfig:
 
     def max_episode_length_steps(self) -> int:
         """1 エピソードの長さを制御ステップ数で返す（端数は切り上げ）。"""
-        return _ceil_ratio(self.env.episode_length_s, self.env.control_dt_s)
-
-
-def _ceil_ratio(numerator: float, denominator: float) -> int:
-    # 割り切れるはずの比が丸め誤差で整数をわずかに超えても、1 ステップ多く数えないようにする
-    ratio = numerator / denominator
-    rounded = round(ratio)
-    if abs(ratio - rounded) <= INTEGER_RATIO_TOLERANCE:
-        return rounded
-    return int(ratio) + 1
+        return ceil_ratio(self.env.episode_length_s, self.env.control_dt_s)

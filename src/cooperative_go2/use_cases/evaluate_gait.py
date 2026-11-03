@@ -7,7 +7,8 @@ from typing import Protocol
 
 import torch
 
-from cooperative_go2.entities.gait_config import INTEGER_RATIO_TOLERANCE, GaitConfig
+from cooperative_go2.entities.config_validation import INTEGER_RATIO_TOLERANCE
+from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_evaluation import (
     CommandSegment,
     FallRecoveryExclusion,

@@ -13,11 +13,12 @@ from cooperative_go2.entities.gait_observation import (
     GaitObservationInputs,
     build_gait_observation,
 )
+from cooperative_go2.entities.go2 import NUM_GO2_JOINTS
 from cooperative_go2.entities.go2_state import Go2Proprioception
 from cooperative_go2.interface_adapters.config_loader import load_gait_settings
 from cooperative_go2.interface_adapters.gait_checkpoint import checkpoint_path, load_gait_controller
 from cooperative_go2.interface_adapters.gait_run_store import RUN_CONFIG_FILENAME
-from cooperative_go2.interface_adapters.rsl_rl_gait import GaitPolicySpecEnvironment, load_rsl_rl_gait_policy
+from cooperative_go2.interface_adapters.rsl_rl_gait import PolicySpecEnvironment, load_rsl_rl_gait_policy
 from cooperative_go2.use_cases.gait_controller import GaitController, InvalidVelocityCommandShapeError
 
 DEVICE = "cpu"
@@ -128,7 +129,8 @@ def run_dir(tmp_path: Path, gait_config_path: Path) -> Path:
     shutil.copyfile(gait_config_path, tmp_path / RUN_CONFIG_FILENAME)
     torch.manual_seed(0)
     runner_cfg = load_gait_settings(gait_config_path).rsl_rl.to_runner_cfg("controller-test")
-    runner = OnPolicyRunner(GaitPolicySpecEnvironment(DEVICE), runner_cfg, None, device=DEVICE)
+    spec = PolicySpecEnvironment(GAIT_OBSERVATION_DIM, NUM_GO2_JOINTS, DEVICE)
+    runner = OnPolicyRunner(spec, runner_cfg, None, device=DEVICE)
     runner.save(str(checkpoint_path(tmp_path, CHECKPOINT_ITERATION)))
     return tmp_path
 

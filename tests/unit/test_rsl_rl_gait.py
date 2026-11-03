@@ -8,13 +8,14 @@ import torch
 from rsl_rl.runners import OnPolicyRunner
 
 from cooperative_go2.entities.gait_observation import GAIT_OBSERVATION_DIM
+from cooperative_go2.entities.go2 import NUM_GO2_JOINTS
 from cooperative_go2.interface_adapters.config_loader import load_gait_settings
 from cooperative_go2.interface_adapters.rsl_rl_config import RslRlPpoConfig
 from cooperative_go2.interface_adapters.rsl_rl_gait import (
     CheckpointLoadError,
     CheckpointNotFoundError,
-    GaitPolicySpecEnvironment,
-    RslRlGaitPolicy,
+    PolicySpecEnvironment,
+    RslRlPolicy,
     load_rsl_rl_gait_policy,
 )
 
@@ -31,7 +32,9 @@ def saved_runner(rsl_rl_config: RslRlPpoConfig) -> OnPolicyRunner:
     """学習直後と同じ構成の OnPolicyRunner（初期化したネットワーク）。"""
     torch.manual_seed(0)
     runner_cfg = rsl_rl_config.to_runner_cfg("contract-test")
-    return OnPolicyRunner(GaitPolicySpecEnvironment(DEVICE), runner_cfg, None, device=DEVICE)
+    return OnPolicyRunner(
+        PolicySpecEnvironment(GAIT_OBSERVATION_DIM, NUM_GO2_JOINTS, DEVICE), runner_cfg, None, device=DEVICE
+    )
 
 
 @pytest.fixture
@@ -51,7 +54,7 @@ def test_loaded_policy_maps_observation_to_twelve_joint_actions(checkpoint_path,
 
 def test_loaded_policy_reproduces_saved_network_output(checkpoint_path, saved_runner, rsl_rl_config) -> None:
     observation = torch.linspace(-1.0, 1.0, GAIT_OBSERVATION_DIM).unsqueeze(0)
-    expected = RslRlGaitPolicy(saved_runner.get_inference_policy(device=DEVICE))(observation)
+    expected = RslRlPolicy(saved_runner.get_inference_policy(device=DEVICE))(observation)
     torch.manual_seed(1)  # 読み込み側のネットワークの初期値を保存元と変え、重みが読み込まれたことを確かめる
 
     actual = load_rsl_rl_gait_policy(checkpoint_path, rsl_rl_config, DEVICE)(observation)
@@ -100,4 +103,4 @@ def test_checkpoint_with_other_structure_is_rejected(tmp_path, rsl_rl_config) ->
 
 def test_spec_environment_cannot_be_stepped() -> None:
     with pytest.raises(RuntimeError):
-        GaitPolicySpecEnvironment(DEVICE).step(torch.zeros(1, 12))
+        PolicySpecEnvironment(GAIT_OBSERVATION_DIM, NUM_GO2_JOINTS, DEVICE).step(torch.zeros(1, 12))
