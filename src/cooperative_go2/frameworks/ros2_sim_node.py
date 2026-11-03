@@ -172,12 +172,17 @@ def _run_trials(args: argparse.Namespace, inputs: _Inputs, node: Node, output_di
         camera = simulation.scene.ground_and_robot.require_camera()
         recorder = GenesisVideoRecorder(camera, output_dir / VIDEO_FILENAME, gait_env.control_dt_s)
         recorder.start()
+    # 全試行の配置とリセット時の関節角を、学習環境の最初のリセット（Go2PushEnv）と同じ順でまとめて引く。
+    # 同じシード・同じデバイスなら、go2-evaluate-push を --num-envs <試行の数> で評価したときの各環境の最初の試行と、
+    # 試行ごとに同じ初期条件になり、ROS 2 を経由しない評価と 1 試行ずつ比べられる
+    layouts = sample_push_layout(inputs.scene.box.initial_xy_m, task.reset, args.num_trials, generator)
+    noise_rad = gait_env.reset_joint_pos_noise_rad
+    reset_dof_pos = sample_reset_dof_pos(simulation.default_dof_pos, args.num_trials, noise_rad, generator)
     records = []
     for trial_index in range(args.num_trials):
-        layout = sample_push_layout(inputs.scene.box.initial_xy_m, task.reset, 1, generator)
-        dof_pos = sample_reset_dof_pos(simulation.default_dof_pos, 1, gait_env.reset_joint_pos_noise_rad, generator)
-        cpu_layout = PushLayout(box_xy_m=layout.box_xy_m.cpu(), goal_xy_m=layout.goal_xy_m.cpu())
-        record = runner.run_trial(trial_index, cpu_layout, dof_pos.cpu())
+        rows = slice(trial_index, trial_index + 1)
+        layout = PushLayout(box_xy_m=layouts.box_xy_m[rows].cpu(), goal_xy_m=layouts.goal_xy_m[rows].cpu())
+        record = runner.run_trial(trial_index, layout, reset_dof_pos[rows].cpu())
         logger.info(
             "試行 %d: %s（%.1f s、実時間 %.1f s）", trial_index, record.result.termination_reason.name,
             record.sim_time_s, record.result.wall_time_s,
@@ -208,7 +213,7 @@ def _conditions(args: argparse.Namespace, inputs: _Inputs) -> PushEvaluationCond
     )
 
 
-def _metrics(outcome: _TrialsOutcome) -> dict[str, object]:
+def _metrics(args: argparse.Namespace, settings: Ros2PushSettings, outcome: _TrialsOutcome) -> dict[str, object]:
     records = outcome.records
     selections: Counter[str] = Counter()
     delays: Counter[int] = Counter()
@@ -218,6 +223,8 @@ def _metrics(outcome: _TrialsOutcome) -> dict[str, object]:
     sim_time_s = sum(record.sim_time_s for record in records)
     wall_time_s = sum(record.result.wall_time_s for record in records)
     return {
+        "genesis_device": args.device,
+        "max_real_time_factor": settings.runtime.max_real_time_factor,
         "num_trials": len(records),
         "physics_steps_by_target_selection": dict(selections),
         "physics_steps_by_target_delay_steps": {str(steps): count for steps, count in sorted(delays.items())},
@@ -282,7 +289,7 @@ def main(argv: list[str] | None = None) -> None:
     summary = summarize_push_trials(results, inputs.push.task.episode.high_level_period_s)
     logger.info("評価指標: %s", summary)
     store.save(_conditions(args, inputs), results, summary)
-    write_node_metrics(output_dir / METRICS_FILENAME, _metrics(outcome))
+    write_node_metrics(output_dir / METRICS_FILENAME, _metrics(args, inputs.settings, outcome))
     logger.info("評価結果を保存した: %s", output_dir)
 
 

@@ -7,7 +7,8 @@ launch で 1 試行を始め、Go2 が歩き出したら高レベル方策のノ
 止まった後も、既定姿勢に移るときの揺れで速さは数秒 0 にならないので、速さではなく区間の正味の移動量で判定する。
 
 前提: リポジトリのルートで、/opt/ros/jazzy/setup.bash・ros2_ws/install/setup.bash・scripts/setup/env.sh を source 済み。
-    uv run --frozen python scripts/p3_ros2_check/check_stop_on_node_loss.py --run-name p3-stop-check --seed 2002
+    uv run --frozen python scripts/p3_ros2_check/check_stop_on_node_loss.py --run-name p3-stop-check --seed 2002 \
+        --device cuda --video true
 
 出力: outputs/ros2_eval/<run-name>/（シミュレーションノードの記録）、outputs/ros2_bags/<run-name>/（rosbag2）、
 outputs/ros2_eval/<run-name>/stop_check.json（このスクリプトの計測値）。
@@ -48,7 +49,8 @@ STANDING_HEIGHT_M = 0.2
 SETTLE_S = 1.5
 # 止まったかを測るシミュレーション時間 [s]
 MEASURE_S = 1.5
-WAIT_TIMEOUT_S = 180.0
+# 動画を撮ると実時間比が 0.15 程度まで下がり、20 s の試行に 2 分以上かかるため長めに取る
+WAIT_TIMEOUT_S = 600.0
 POLL_S = 0.05
 
 
@@ -143,10 +145,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="方策のノードを止めるとロボットが止まることを確かめる")
     parser.add_argument("--run-name", required=True)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--device", choices=["cpu", "cuda"], required=True, help="Genesis を動かすデバイス")
+    parser.add_argument("--video", choices=["true", "false"], required=True, help="止まる様子の評価動画を撮るか")
     args = parser.parse_args()
     launch = subprocess.Popen(
-        ["ros2", "launch", LAUNCH_FILE, f"seed:={args.seed}", "num_trials:=1", f"run_name:={args.run_name}"],
-    )
+        [
+            "ros2", "launch", LAUNCH_FILE, f"seed:={args.seed}", "num_trials:=1", f"run_name:={args.run_name}",
+            f"device:={args.device}", f"video:={args.video}",
+        ],
+    )  # fmt: skip
     rclpy.init()
     node = Node("stop_check")
     recorder = OdomRecorder(node)
