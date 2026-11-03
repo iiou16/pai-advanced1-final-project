@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import rclpy
+import torch
 from genesis.utils.geom import default_friction
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -225,6 +226,7 @@ def _metrics(args: argparse.Namespace, settings: Ros2PushSettings, outcome: _Tri
     return {
         "genesis_device": args.device,
         "max_real_time_factor": settings.runtime.max_real_time_factor,
+        "torch_num_threads": settings.runtime.torch_num_threads,
         "num_trials": len(records),
         "physics_steps_by_target_selection": dict(selections),
         "physics_steps_by_target_delay_steps": {str(steps): count for steps, count in sorted(delays.items())},
@@ -256,6 +258,7 @@ def main(argv: list[str] | None = None) -> None:
     except GitCommitUnavailableError as error:
         logger.error("%s", error)
         sys.exit(EXIT_GIT_UNAVAILABLE)
+    torch.set_num_threads(inputs.settings.runtime.torch_num_threads)
     output_dir = OUTPUT_ROOT / args.run_name
     store = FilePushEvaluationStore(output_dir)
     try:

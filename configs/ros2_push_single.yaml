@@ -20,3 +20,6 @@ runtime:
   max_real_time_factor: 1.0
   startup_timeout_s: 120.0
   reply_timeout_s: 10.0
+  # PyTorch が CPU の計算に使うスレッドの数（3 ノードとも）。歩行方策の推論は 1 スレッドで平均 0.19 ms、
+  # 既定の 8 スレッドでは平均 1.1 ms・最大 18 ms で、他のプロセスと CPU を取り合うと制御周期（20 ms）を超えて遅れた
+  torch_num_threads: 1

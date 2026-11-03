@@ -35,6 +35,7 @@ from cooperative_go2.entities.command_expiry import ns_to_seconds, seconds_to_ns
 from cooperative_go2.entities.velocity_command import VELOCITY_COMMAND_SIZE
 from cooperative_go2.interface_adapters.config_loader import (
     ConfigValidationError,
+    Ros2PushSettings,
     load_push_training_settings,
     load_ros2_push_settings,
 )
@@ -226,8 +227,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _build_driver(config_path: Path) -> tuple[PushPolicyDriver, float]:
-    settings = load_ros2_push_settings(config_path)
+def _build_driver(settings: Ros2PushSettings) -> tuple[PushPolicyDriver, float]:
     push = load_push_training_settings(Path(settings.push_config))
     policy = load_push_policy(Path(settings.push_policy.run_dir), settings.push_policy.checkpoint, push, DEVICE)
     return PushPolicyDriver(policy, push.task), push.task.episode.high_level_period_s
@@ -239,11 +239,13 @@ def main(argv: list[str] | None = None) -> None:
     raw_argv = sys.argv if argv is None else argv
     args = _parse_args(remove_ros_args(raw_argv)[1:])
     try:
-        driver, period_s = _build_driver(args.config)
+        settings = load_ros2_push_settings(args.config)
+        driver, period_s = _build_driver(settings)
     except (FileNotFoundError, ConfigValidationError, PolicyConditionMismatchError, CheckpointNotFoundError,
             CheckpointLoadError) as error:  # fmt: skip
         logger.error("高レベル方策のノードの設定が不正: %s", error)
         sys.exit(EXIT_INVALID_INPUT)
+    torch.set_num_threads(settings.runtime.torch_num_threads)
     # rclpy にシグナルを処理させない。rclpy が受信の途中でコンテキストを閉じると、受信の処理が内部エラーで落ちるため。
     # SIGINT は KeyboardInterrupt として受け、依頼を待つ処理と受信を止めてから閉じる
     rclpy.init(args=raw_argv, signal_handler_options=SignalHandlerOptions.NO)

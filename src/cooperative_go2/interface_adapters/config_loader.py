@@ -122,17 +122,21 @@ class Ros2RuntimeConfig:
             計算が速くてもこれ以上は速くしない。
         startup_timeout_s: 方策のノードが立ち上がるのを待つ実時間の上限 [s]。
         reply_timeout_s: 方策のノードがリセットと目標の依頼に応えるのを待つ実時間の上限 [s]。
+        torch_num_threads: 各ノードで PyTorch が CPU の計算に使うスレッドの数。1 台分の小さなネットワークの推論では、
+            複数のスレッドを調整する手間の方が大きく、他のプロセスと CPU を取り合うと推論が制御周期を超えて遅れるため。
     """
 
     max_real_time_factor: float
     startup_timeout_s: float
     reply_timeout_s: float
+    torch_num_threads: int
 
     def __post_init__(self) -> None:
         check = ConfigValueChecker(InvalidRos2RuntimeConfigError)
         check.positive("max_real_time_factor", self.max_real_time_factor)
         check.positive("startup_timeout_s", self.startup_timeout_s)
         check.positive("reply_timeout_s", self.reply_timeout_s)
+        check.positive("torch_num_threads", self.torch_num_threads)
 
 
 @dataclass(frozen=True)
