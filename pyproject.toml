@@ -3,6 +3,7 @@ name = "cooperative-go2"
 version = "0.1.0"
 description = "Genesis と ROS 2 で四足歩行ロボット Go2 が箱を押して通路を開ける強化学習プロジェクト"
 readme = "README.md"
+license = "MIT"
 # ROS 2 Jazzy の rclpy が apt のシステム Python 3.12 向けにビルドされるため、同じ版に揃える
 requires-python = ">=3.12,<3.13"
 dependencies = [

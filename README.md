@@ -168,3 +168,7 @@ uv run --frozen pytest tests/ros2
 |---|---|---|---|
 | Go2 の歩行学習の環境・報酬・PPO の設定 | Genesis 公式の例 `examples/locomotion/`（[genesis-world](https://github.com/Genesis-Embodied-AI/genesis-world) v1.4.5） | Apache-2.0 | コードは複製せず、観測・報酬の構成と初期値を参考に `src/cooperative_go2/` で実装した |
 | Go2 の URDF・平面の URDF | genesis-world パッケージ同梱のアセット | 同梱物に個別の表記なし（原典のライセンスは未確認） | パッケージから実行時に読み込む。本リポジトリには含めない |
+
+## ライセンス
+
+本リポジトリのコードは [MIT License](LICENSE) で公開する。上の「参考にしたもの」と、実行時にパッケージから読み込むアセットは、それぞれの出典のライセンスに従う。
