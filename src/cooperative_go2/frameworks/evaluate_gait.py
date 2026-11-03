@@ -37,7 +37,7 @@ from cooperative_go2.interface_adapters.gait_run_store import RUN_CONFIG_FILENAM
 from cooperative_go2.interface_adapters.genesis_flat_scene import CameraSpec
 from cooperative_go2.interface_adapters.genesis_gait_simulation import GenesisGaitSimulation
 from cooperative_go2.interface_adapters.genesis_video_recorder import GenesisVideoRecorder, VideoRecordingError
-from cooperative_go2.interface_adapters.rsl_rl_gait import (
+from cooperative_go2.interface_adapters.rsl_rl_policy import (
     CheckpointLoadError,
     CheckpointNotFoundError,
     RslRlPolicy,

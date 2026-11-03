@@ -11,7 +11,8 @@ from typing import get_args, get_origin, get_type_hints
 
 import yaml
 
-from cooperative_go2.entities.config_validation import InvalidConfigError
+from cooperative_go2.entities.command_expiry import CommandExpiryConfig
+from cooperative_go2.entities.config_validation import ConfigValueChecker, InvalidConfigError
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_evaluation import GaitEvaluationSuite, InvalidEvaluationScenarioError
 from cooperative_go2.entities.push_config import RuleBasedPushConfig
@@ -92,6 +93,80 @@ class PushTrainingSettings:
 
     def __post_init__(self) -> None:
         require_rule_based_within_commands(self.rule_based, self.task.commands)
+
+
+class InvalidRos2RuntimeConfigError(InvalidConfigError):
+    """ROS 2 の実行系の設定が不正であることを表す。"""
+
+
+@dataclass(frozen=True)
+class PushPolicySource:
+    """ROS 2 の実行系で使う、学習済みの高レベル方策の出所。
+
+    Attributes:
+        run_dir: 箱押しの学習の出力先（設定の写し push_single.yaml とチェックポイントがあるディレクトリ）。
+            相対パスは現在の作業ディレクトリ起点。
+        checkpoint: 読み込むチェックポイントの反復番号（model_<番号>.pt）。
+    """
+
+    run_dir: str
+    checkpoint: int
+
+
+@dataclass(frozen=True)
+class Ros2RuntimeConfig:
+    """ROS 2 の実行系の、実時間の条件。
+
+    Attributes:
+        max_real_time_factor: シミュレーションを実時間の何倍まで速く進めるか。方策のノードの応答を待つ余裕を残すため、
+            計算が速くてもこれ以上は速くしない。
+        startup_timeout_s: 方策のノードが立ち上がるのを待つ実時間の上限 [s]。
+        reply_timeout_s: 方策のノードがリセットと目標の依頼に応えるのを待つ実時間の上限 [s]。
+        torch_num_threads: 各ノードで PyTorch が CPU の計算に使うスレッドの数。1 台分の小さなネットワークの推論では、
+            複数のスレッドを調整する手間の方が大きく、他のプロセスと CPU を取り合うと推論が制御周期を超えて遅れるため。
+    """
+
+    max_real_time_factor: float
+    startup_timeout_s: float
+    reply_timeout_s: float
+    torch_num_threads: int
+
+    def __post_init__(self) -> None:
+        check = ConfigValueChecker(InvalidRos2RuntimeConfigError)
+        check.positive("max_real_time_factor", self.max_real_time_factor)
+        check.positive("startup_timeout_s", self.startup_timeout_s)
+        check.positive("reply_timeout_s", self.reply_timeout_s)
+        check.positive("torch_num_threads", self.torch_num_threads)
+
+
+@dataclass(frozen=True)
+class Ros2PushSettings:
+    """ROS 2 を経由した 1 台の箱押しの設定ファイル（configs/ros2_push_single.yaml）1 つ分。
+
+    Attributes:
+        push_config: 箱押しの設定ファイル（configs/push_single.yaml 形式）。配置・成功判定・歩行方策・シーンをここから取る。
+            相対パスは現在の作業ディレクトリ起点。
+        push_policy: 学習済みの高レベル方策。
+        command_expiry: 速度指令と関節目標の有効期限。
+        runtime: 実時間の条件。
+    """
+
+    push_config: str
+    push_policy: PushPolicySource
+    command_expiry: CommandExpiryConfig
+    runtime: Ros2RuntimeConfig
+
+
+def load_ros2_push_settings(path: Path) -> Ros2PushSettings:
+    """ROS 2 を経由した 1 台の箱押しの設定ファイルを読み込み、検証済みの設定を返す。
+
+    push_config が指す箱押しの設定ファイルは読まない（load_push_training_settings で別に読む）。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
+    """
+    return _build_dataclass(Ros2PushSettings, _read_yaml(path), _ROOT_KEY_PATH)
 
 
 def load_gait_settings(path: Path) -> GaitSettings:

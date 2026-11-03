@@ -18,7 +18,7 @@ from cooperative_go2.entities.go2_state import Go2Proprioception
 from cooperative_go2.interface_adapters.config_loader import load_gait_settings
 from cooperative_go2.interface_adapters.gait_checkpoint import checkpoint_path, load_gait_controller
 from cooperative_go2.interface_adapters.gait_run_store import RUN_CONFIG_FILENAME
-from cooperative_go2.interface_adapters.rsl_rl_gait import PolicySpecEnvironment, load_rsl_rl_gait_policy
+from cooperative_go2.interface_adapters.rsl_rl_policy import PolicySpecEnvironment, load_rsl_rl_gait_policy
 from cooperative_go2.use_cases.gait_controller import GaitController, InvalidVelocityCommandShapeError
 
 DEVICE = "cpu"

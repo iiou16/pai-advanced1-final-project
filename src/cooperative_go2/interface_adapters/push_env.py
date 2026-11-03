@@ -12,7 +12,6 @@ from tensordict import TensorDict
 
 from cooperative_go2.entities.episode_reward_tracker import EpisodeRewardTracker, EpisodeSummary, EpisodeTrackingSpec
 from cooperative_go2.entities.gait_config import GaitConfig
-from cooperative_go2.entities.gait_termination import exceeds_tilt_limit
 from cooperative_go2.entities.go2_state import Go2State, sample_reset_dof_pos
 from cooperative_go2.entities.push_evaluation import goal_distance_m
 from cooperative_go2.entities.push_layout import PushLayout, sample_push_layout
@@ -22,15 +21,13 @@ from cooperative_go2.entities.push_observation import (
     PushTaskSnapshot,
     build_push_observation,
 )
+from cooperative_go2.entities.push_episode_judge import PushJudgeInputs, judge_push_step
 from cooperative_go2.entities.push_reward import PUSH_REWARD_TERM_NAMES, PushRewardInputs, compute_push_reward_terms
-from cooperative_go2.entities.push_success import advance_goal_hold_steps, has_held_goal, is_in_goal_region
 from cooperative_go2.entities.push_task_config import PushTaskConfig, require_compatible_with_gait
 from cooperative_go2.entities.push_termination import (
     PushTerminationFlags,
     PushTerminationReason,
-    classify_push_terminations,
     detect_divergence,
-    is_outside_arena,
 )
 from cooperative_go2.entities.velocity_command import VELOCITY_COMMAND_SIZE
 from cooperative_go2.interface_adapters.rsl_rl_config import POLICY_OBSERVATION_GROUP
@@ -161,7 +158,6 @@ class Go2PushEnv:
         self._simulation = simulation
         self._controller = controller
         self._gait_steps = task.gait_steps_per_high_level_step(setup.gait.env.control_dt_s)
-        self._required_hold_steps = task.required_hold_steps()
         limits = task.commands.as_ranges()
         self._command_low = torch.tensor([limit.low for limit in limits], device=self.device)
         self._command_high = torch.tensor([limit.high for limit in limits], device=self.device)
@@ -231,10 +227,21 @@ class Go2PushEnv:
             self.cfg.divergence,
         )
         self.episode_length_buf += 1
-        in_goal = is_in_goal_region(self._box.position_xy_m, self._goal_xy, self.cfg.success.goal_radius_m)
-        self._hold_steps = advance_goal_hold_steps(self._hold_steps, in_goal)
-        flags = self._termination_flags(diverged)
-        reasons = classify_push_terminations(flags)
+        judgement = judge_push_step(
+            PushJudgeInputs(
+                robot_xy_m=self._robot.position_xy_m,
+                box_xy_m=self._box.position_xy_m,
+                goal_xy_m=self._goal_xy,
+                base_euler_deg=self._go2_state.base_euler_deg,
+                episode_steps=self.episode_length_buf,
+                hold_steps=self._hold_steps,
+                diverged=diverged,
+            ),
+            self.cfg,
+        )
+        self._hold_steps = judgement.hold_steps
+        flags = judgement.flags
+        reasons = judgement.reasons
         reward_terms = self._weighted_reward_terms(commands, flags, reasons)
         self._rewards.add_step(reward_terms)
         done = reasons != int(PushTerminationReason.NONE)
@@ -270,20 +277,6 @@ class Go2PushEnv:
             diverged = diverged | self._simulation.diverged_mask()
             self._go2_state = self._simulation.read_go2_state()
         return diverged
-
-    def _termination_flags(self, diverged: torch.Tensor) -> PushTerminationFlags:
-        episode = self.cfg.episode
-        arena = self.cfg.arena
-        out_of_bounds = is_outside_arena(self._robot.position_xy_m, arena) | is_outside_arena(
-            self._box.position_xy_m, arena
-        )
-        return PushTerminationFlags(
-            time_out=self.episode_length_buf >= self.max_episode_length,
-            succeeded=has_held_goal(self._hold_steps, self._required_hold_steps),
-            fallen=exceeds_tilt_limit(self._go2_state.base_euler_deg, episode.fall_roll_deg, episode.fall_pitch_deg),
-            out_of_bounds=out_of_bounds,
-            diverged=diverged,
-        )
 
     def _weighted_reward_terms(
         self, commands: torch.Tensor, flags: PushTerminationFlags, reasons: torch.Tensor

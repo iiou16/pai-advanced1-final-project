@@ -11,7 +11,7 @@ from cooperative_go2.entities.gait_observation import GAIT_OBSERVATION_DIM
 from cooperative_go2.entities.go2 import NUM_GO2_JOINTS
 from cooperative_go2.interface_adapters.config_loader import load_gait_settings
 from cooperative_go2.interface_adapters.rsl_rl_config import RslRlPpoConfig
-from cooperative_go2.interface_adapters.rsl_rl_gait import (
+from cooperative_go2.interface_adapters.rsl_rl_policy import (
     CheckpointLoadError,
     CheckpointNotFoundError,
     PolicySpecEnvironment,

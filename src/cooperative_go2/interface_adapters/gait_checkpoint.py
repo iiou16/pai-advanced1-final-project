@@ -6,7 +6,7 @@ import torch
 
 from cooperative_go2.interface_adapters.config_loader import load_gait_settings
 from cooperative_go2.interface_adapters.gait_run_store import RUN_CONFIG_FILENAME
-from cooperative_go2.interface_adapters.rsl_rl_gait import load_rsl_rl_gait_policy
+from cooperative_go2.interface_adapters.rsl_rl_policy import load_rsl_rl_gait_policy
 from cooperative_go2.use_cases.gait_controller import GaitController
 
 

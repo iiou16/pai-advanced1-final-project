@@ -3,6 +3,7 @@ name = "cooperative-go2"
 version = "0.1.0"
 description = "Genesis と ROS 2 で四足歩行ロボット Go2 が箱を押して通路を開ける強化学習プロジェクト"
 readme = "README.md"
+license = "MIT"
 # ROS 2 Jazzy の rclpy が apt のシステム Python 3.12 向けにビルドされるため、同じ版に揃える
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -24,6 +25,10 @@ go2-train-gait = "cooperative_go2.frameworks.train_gait:main"
 go2-evaluate-gait = "cooperative_go2.frameworks.evaluate_gait:main"
 go2-evaluate-push = "cooperative_go2.frameworks.evaluate_push:main"
 go2-train-push = "cooperative_go2.frameworks.train_push:main"
+# ROS 2 の実行系のノード。/opt/ros/jazzy と ros2_ws/install の setup.bash を source したシェルで動かす
+go2-ros2-sim = "cooperative_go2.frameworks.ros2_sim_node:main"
+go2-ros2-gait = "cooperative_go2.frameworks.ros2_gait_node:main"
+go2-ros2-coord = "cooperative_go2.frameworks.ros2_coord_node:main"
 
 [dependency-groups]
 dev = ["pytest"]
@@ -36,7 +41,11 @@ build-backend = "hatchling.build"
 packages = ["src/cooperative_go2"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# tests/ros2 は ROS 2 の環境（/opt/ros/jazzy と ros2_ws/install の setup.bash）を source してから明示して実行する
+testpaths = ["tests/unit"]
+# ROS 2 を source すると、apt の launch_testing が pytest のプラグインとして読み込まれ、venv に無い依存（lark）で止まる。
+# 本リポジトリのテストは launch_testing を使わないので読み込まない
+addopts = "-p no:launch_testing -p no:launch_ros"
 
 [tool.uv]
 # uv 管理の Python を落とさず、rclpy と共存できるシステム Python を使う

@@ -12,8 +12,8 @@ from cooperative_go2.interface_adapters.config_loader import PushTrainingSetting
 from cooperative_go2.interface_adapters.gait_checkpoint import checkpoint_path
 from cooperative_go2.interface_adapters.push_env import Go2PushEnv
 from cooperative_go2.interface_adapters.rsl_rl_config import POLICY_OBSERVATION_GROUP
-from cooperative_go2.interface_adapters.rsl_rl_gait import PolicySpecEnvironment, RslRlPolicy, load_rsl_rl_policy
-from cooperative_go2.interface_adapters.rsl_rl_push import PUSH_RUN_CONFIG_FILENAME
+from cooperative_go2.interface_adapters.rsl_rl_policy import PolicySpecEnvironment, RslRlPolicy, load_rsl_rl_policy
+from cooperative_go2.interface_adapters.push_run_files import PUSH_RUN_CONFIG_FILENAME
 from cooperative_go2.use_cases.evaluate_push import PushEnvironmentView, PushEvaluationStep
 
 

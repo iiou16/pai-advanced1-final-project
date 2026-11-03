@@ -19,7 +19,7 @@ from cooperative_go2.interface_adapters.config_loader import (
     load_push_training_settings,
 )
 from cooperative_go2.interface_adapters.gait_run_store import InvalidRunNameError, resolve_run_dir
-from cooperative_go2.interface_adapters.rsl_rl_gait import CheckpointLoadError, CheckpointNotFoundError
+from cooperative_go2.interface_adapters.rsl_rl_policy import CheckpointLoadError, CheckpointNotFoundError
 from cooperative_go2.interface_adapters.rsl_rl_push import FilePushRunStore, RslRlPushTrainerFactory
 from cooperative_go2.use_cases.simulation_errors import SimulationSetupError
 from cooperative_go2.use_cases.train_push import RunAlreadyExistsError, train_push
