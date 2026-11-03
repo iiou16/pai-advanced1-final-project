@@ -7,10 +7,16 @@ from genesis.engine.entities import RigidEntity
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.go2_state import Go2State
 from cooperative_go2.entities.planar_frame import yaw_from_quat_wxyz
+from cooperative_go2.entities.push_layout import PushLayout
 from cooperative_go2.entities.push_observation import PlanarBodyState
 from cooperative_go2.interface_adapters.config_loader import PushSceneSettings
 from cooperative_go2.interface_adapters.genesis_go2_body import GenesisGo2Body
-from cooperative_go2.interface_adapters.genesis_push_scene import PushScene, build_push_scene
+from cooperative_go2.interface_adapters.genesis_push_scene import (
+    GOAL_MARKER_THICKNESS_M,
+    PushScene,
+    PushSceneRequest,
+    build_push_scene,
+)
 
 PLANAR_AXES = slice(0, 2)
 VERTICAL_AXIS_INDEX = 2
@@ -43,16 +49,23 @@ class GenesisPushSimulation:
         self._box_half_height_m = box_half_height_m
 
     @classmethod
-    def build(cls, gait_config: GaitConfig, settings: PushSceneSettings, num_envs: int) -> "GenesisPushSimulation":
+    def build(
+        cls, gait_config: GaitConfig, settings: PushSceneSettings, request: PushSceneRequest
+    ) -> "GenesisPushSimulation":
         """シーン S1_push を構築し、Go2 の関節を設定する。前提: gs.init() 済みであること。
 
         Raises:
             ValueError: num_envs が 1 未満。
             SimulationSetupError: シーンを構築できない、または Go2 のモデルが想定と異なる。
         """
-        scene = build_push_scene(gait_config, settings, num_envs)
+        scene = build_push_scene(gait_config, settings, request)
         body = GenesisGo2Body(scene.robot, gait_config.robot)
         return cls(scene, body, box_half_height_m=settings.box.size_m[VERTICAL_AXIS_INDEX] / 2)
+
+    @property
+    def scene(self) -> PushScene:
+        """構築済みのシーン（評価動画のカメラを取り出すのに使う）。"""
+        return self._scene
 
     @property
     def default_dof_pos(self) -> torch.Tensor:
@@ -96,15 +109,22 @@ class GenesisPushSimulation:
         """直前の物理ステップで物理計算が発散した環境のマスク (num_envs,) を返す。"""
         return self._scene.diverged_mask()
 
-    def reset(self, mask: torch.Tensor, dof_pos: torch.Tensor, box_xy_m: torch.Tensor) -> None:
-        """mask が True の環境の Go2 を初期位置・関節角 dof_pos で、箱を box_xy_m (num_envs, 2) に水平に置く。
+    def reset(self, mask: torch.Tensor, dof_pos: torch.Tensor, layout: PushLayout) -> None:
+        """mask が True の環境の Go2 を初期位置・関節角 dof_pos で、箱を layout の位置に水平に置く。
+
+        評価動画を撮るシーンでは、目標領域を示す円板も layout の目標の位置に動かす。
 
         箱の位置を書き換えるのはエピソードの始めのこのときだけで、エピソードの間は接触と摩擦だけで動かす（要件 3.1）。
         """
         self._body.reset(mask, dof_pos)
+        box_xy_m = layout.box_xy_m
         num_envs = box_xy_m.shape[0]
         heights = torch.full((num_envs, 1), self._box_half_height_m, dtype=box_xy_m.dtype, device=box_xy_m.device)
         box = self._scene.box
         box.set_pos(torch.cat((box_xy_m, heights), dim=1), envs_idx=mask, zero_velocity=True)
         upright = torch.tensor(UPRIGHT_QUAT_WXYZ, dtype=gs.tc_float, device=gs.device).expand(num_envs, -1)
         box.set_quat(upright, envs_idx=mask, zero_velocity=True)
+        marker = self._scene.goal_marker
+        if marker is not None:
+            marker_height = torch.full_like(heights, GOAL_MARKER_THICKNESS_M / 2)
+            marker.set_pos(torch.cat((layout.goal_xy_m, marker_height), dim=1), envs_idx=mask)

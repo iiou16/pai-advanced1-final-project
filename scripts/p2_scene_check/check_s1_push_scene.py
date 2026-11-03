@@ -19,7 +19,7 @@ from cooperative_go2.entities.push_evaluation import tilt_deg
 from cooperative_go2.frameworks.genesis_runtime import init_genesis_on_cpu
 from cooperative_go2.interface_adapters.config_loader import load_gait_settings, load_push_scene_settings
 from cooperative_go2.interface_adapters.genesis_go2_body import GenesisGo2Body
-from cooperative_go2.interface_adapters.genesis_push_scene import PushScene, build_push_scene
+from cooperative_go2.interface_adapters.genesis_push_scene import PushScene, PushSceneRequest, build_push_scene
 
 GAIT_CONFIG_PATH = Path("configs/gait.yaml")
 SCENE_CONFIG_PATH = Path("configs/scenes/s1_push.yaml")
@@ -185,7 +185,7 @@ def main() -> None:
     gait_config = load_gait_settings(GAIT_CONFIG_PATH).gait
     scene_settings = load_push_scene_settings(SCENE_CONFIG_PATH)
     init_genesis_on_cpu(SEED)
-    scene = build_push_scene(gait_config, scene_settings, NUM_ENVS)
+    scene = build_push_scene(gait_config, scene_settings, PushSceneRequest(NUM_ENVS, video=None))
     body = GenesisGo2Body(scene.robot, gait_config.robot)
     box = scene_settings.box
     probe = SceneProbe(scene, body, gait_config.env.control_dt_s, resting_height_m=box.size_m[2] / 2)

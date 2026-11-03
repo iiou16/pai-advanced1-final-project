@@ -7,6 +7,7 @@ import torch
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.go2 import NUM_GO2_JOINTS
 from cooperative_go2.entities.go2_state import Go2State, initial_go2_state
+from cooperative_go2.entities.push_layout import PushLayout
 from cooperative_go2.entities.push_observation import PUSH_OBSERVATION_DIM, PlanarBodyState
 from cooperative_go2.entities.push_task_config import PushTaskConfig
 from cooperative_go2.entities.push_termination import PushTerminationReason
@@ -76,10 +77,11 @@ class FakePushSimulation:
     def diverged_mask(self) -> torch.Tensor:
         return self.diverged
 
-    def reset(self, mask: torch.Tensor, dof_pos: torch.Tensor, box_xy_m: torch.Tensor) -> None:
+    def reset(self, mask: torch.Tensor, dof_pos: torch.Tensor, layout: PushLayout) -> None:
         self.reset_masks.append(mask.clone())
         rows = mask.unsqueeze(1)
-        self.box = dataclasses.replace(self.box, position_xy_m=torch.where(rows, box_xy_m, self.box.position_xy_m))
+        box_xy = torch.where(rows, layout.box_xy_m, self.box.position_xy_m)
+        self.box = dataclasses.replace(self.box, position_xy_m=box_xy)
 
 
 def _planar(x: float, y: float) -> PlanarBodyState:

@@ -14,8 +14,13 @@ import yaml
 from cooperative_go2.entities.config_validation import InvalidConfigError
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_evaluation import GaitEvaluationSuite, InvalidEvaluationScenarioError
+from cooperative_go2.entities.push_config import RuleBasedPushConfig
 from cooperative_go2.entities.push_scene_config import BoxConfig
-from cooperative_go2.entities.push_task_config import PushTaskConfig
+from cooperative_go2.entities.push_task_config import (
+    PushTaskConfig,
+    PushTrainingRunConfig,
+    require_rule_based_within_commands,
+)
 from cooperative_go2.interface_adapters.genesis_scene_config import GenesisSceneConfig, require_genesis_friction
 from cooperative_go2.interface_adapters.rsl_rl_config import RslRlPpoConfig
 
@@ -73,11 +78,20 @@ class PushTrainingSettings:
         scene_config: シーンの設定ファイル（configs/scenes/s1_push.yaml 形式）。相対パスは現在の作業ディレクトリ起点。
         gait_policy: 固定して使う歩行方策の出所。
         task: 学習環境の設定。内側の層に渡す。
+        rule_based: 学習した方策と比べる、規則ベースの制御の設定。
+        rsl_rl: 高レベル方策の PPO とネットワークの設定（RSL-RL との接続にだけ使う）。
+        training: 学習の実行条件。
     """
 
     scene_config: str
     gait_policy: GaitPolicySource
     task: PushTaskConfig
+    rule_based: RuleBasedPushConfig
+    rsl_rl: RslRlPpoConfig
+    training: PushTrainingRunConfig
+
+    def __post_init__(self) -> None:
+        require_rule_based_within_commands(self.rule_based, self.task.commands)
 
 
 def load_gait_settings(path: Path) -> GaitSettings:

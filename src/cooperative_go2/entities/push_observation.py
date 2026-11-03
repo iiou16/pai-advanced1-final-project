@@ -48,6 +48,21 @@ class PlanarBodyState:
 
 
 @dataclass(frozen=True)
+class PushTaskSnapshot:
+    """ある時点の Go2・箱・目標の位置（各環境の原点から見たワールド座標系の水平面）。
+
+    Attributes:
+        robot: Go2 の胴体の水平面の状態。
+        box: 箱の水平面の状態。
+        goal_xy_m: 目標領域の中心 (num_envs, 2) [m]。
+    """
+
+    robot: PlanarBodyState
+    box: PlanarBodyState
+    goal_xy_m: torch.Tensor
+
+
+@dataclass(frozen=True)
 class PushObservationInputs:
     """観測の材料。
 

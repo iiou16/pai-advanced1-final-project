@@ -23,6 +23,7 @@ from cooperative_go2.interface_adapters.config_loader import (
 )
 from cooperative_go2.interface_adapters.gait_checkpoint import load_gait_controller
 from cooperative_go2.interface_adapters.gait_run_store import RUN_CONFIG_FILENAME
+from cooperative_go2.interface_adapters.genesis_push_scene import PushSceneRequest
 from cooperative_go2.interface_adapters.genesis_push_simulation import GenesisPushSimulation
 from cooperative_go2.interface_adapters.push_env import Go2PushEnv, PushEnvSetup
 
@@ -49,7 +50,7 @@ def main() -> None:
 
     init_genesis_on_cpu(SEED)
     generator = make_seeded_generator(SEED)
-    simulation = GenesisPushSimulation.build(gait, scene_settings, NUM_ENVS)
+    simulation = GenesisPushSimulation.build(gait, scene_settings, PushSceneRequest(NUM_ENVS, video=None))
     controller = load_gait_controller(run_dir, settings.gait_policy.checkpoint, NUM_ENVS, generator.device)
     setup = PushEnvSetup(task=task, gait=gait, base_box_xy_m=scene_settings.box.initial_xy_m, generator=generator)
     env = Go2PushEnv(setup, simulation, controller)

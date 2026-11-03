@@ -1,19 +1,19 @@
 # 1 台の箱押し（シーン S1_push）の高レベル方策の学習環境の設定。
-# 値は初期値で、規則ベースで押す実験（P2-02）と学習（P2-07）で調整する。
+# 値は初期値で、規則ベースで押す実験と高レベル方策の学習で調整する。
 # すべてのキーが必須。読み込み時に過不足・型・値の範囲を検証し、歩行方策を読み込んだ後に、
 # 歩行方策の学習時の設定（gait_policy.run_dir の gait.yaml）と矛盾しないことを確かめる。
 
 # シーン（箱の寸法・質量・摩擦、Genesis の接触の設定）
 scene_config: configs/scenes/s1_push.yaml
 
-# 固定して使う歩行方策（P1-04 で学習したもの）。学習時の設定の写し（gait.yaml）も同じディレクトリから読む
+# 固定して使う歩行方策。学習時の設定の写し（gait.yaml）も同じディレクトリから読む
 gait_policy:
   run_dir: outputs/gait/gait-command-tracking
   checkpoint: 1500
 
 task:
   episode:
-    # 学習の並列環境の数。GPU のメモリと速度は P2-07 で計測して決める
+    # 学習の並列環境の数。GPU のメモリと速度を計測して決める
     num_envs: 1024
     # 高レベル方策の周期 10 Hz。歩行方策（50 Hz）を 5 回呼ぶ
     high_level_period_s: 0.1
@@ -36,7 +36,7 @@ task:
 
   success:
     goal_radius_m: 0.3
-    # 成功とみなす維持時間は P2-02 で確定して requirements.md に書く
+    # 成功とみなす維持時間は、規則ベースで押す実験で確定して requirements.md に書く
     hold_time_s: 1.0
 
   # シーンの有効範囲。外に出た箱やロボットはシーン外への離脱として終える
@@ -64,3 +64,44 @@ task:
       robot_fall: -10.0
       unsafe_collision: -1.0
       control_effort: -0.01
+
+# 学習した方策と比べる規則ベースの制御（箱の後ろへ回り込み、箱の中心へ直進して押す）。
+# 速さと旋回は commands の範囲に収める（読み込み時に検証する）
+rule_based:
+  approach_speed_mps: 0.5
+  push_speed_mps: 0.3
+  yaw_gain_per_s: 2.0
+  max_yaw_rate_radps: 1.0
+  # 箱の奥行きの半分（0.2 m）と Go2 の胴体の長さの半分（約 0.35 m）の和より大きくする
+  standoff_m: 0.8
+  # 箱の幅の半分（0.2 m）と Go2 の胴体の幅の半分（約 0.15 m）の和より大きくする
+  side_offset_m: 0.6
+  align_min_cos: 0.95
+
+# 高レベル方策の PPO とネットワークの設定。観測（22 次元）と行動（3 次元）が小さいため、歩行より小さいネットワークにする
+rsl_rl:
+  clip_param: 0.2
+  desired_kl: 0.01
+  entropy_coef: 0.005
+  gamma: 0.99
+  lam: 0.95
+  learning_rate: 0.0005
+  max_grad_norm: 1.0
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  schedule: adaptive
+  use_clipped_value_loss: true
+  value_loss_coef: 1.0
+  # 高レベル方策は 10 Hz なので、1 反復で各環境 2.4 秒分を集める
+  num_steps_per_env: 24
+  actor_hidden_dims: [256, 128, 64]
+  critic_hidden_dims: [256, 128, 64]
+  activation: elu
+  init_noise_std: 0.5
+  # チェックポイントを保存する反復の間隔。反復番号（0 から数える）がこの倍数のときと、最後の反復で保存する
+  save_interval: 50
+
+training:
+  # 学習用のシード。評価には別のシード（2001 など）を使う
+  seed: 11
+  max_iterations: 501

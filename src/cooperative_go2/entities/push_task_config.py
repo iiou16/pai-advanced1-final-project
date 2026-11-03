@@ -16,6 +16,7 @@ from cooperative_go2.entities.push_config import (
     PushObservationScales,
     PushRewardConfig,
     PushSuccessConfig,
+    RuleBasedPushConfig,
 )
 
 _check = ConfigValueChecker(InvalidPushConfigError)
@@ -153,3 +154,41 @@ def require_commands_within_gait_range(limits: PushCommandLimits, gait_command: 
                 f"commands.{name} [{limit.low}, {limit.high}] は歩行方策が学習した範囲 "
                 f"[{trained.low}, {trained.high}] に収める必要がある"
             )
+
+
+def require_rule_based_within_commands(rule_based: RuleBasedPushConfig, limits: PushCommandLimits) -> None:
+    """規則ベースの制御が出す速度指令が、高レベル方策の指令の範囲の外なら InvalidPushConfigError を送出する。
+
+    範囲の外の指令は環境が切り詰めるため、設定した速さで動かないまま気づけなくなる。
+    """
+    forward_high = limits.vx_mps.high
+    for name, speed in (
+        ("approach_speed_mps", rule_based.approach_speed_mps),
+        ("push_speed_mps", rule_based.push_speed_mps),
+    ):
+        if speed > forward_high:
+            raise InvalidPushConfigError(
+                f"rule_based.{name} ({speed}) は commands.vx_mps の上限 {forward_high} 以下が必要"
+            )
+    yaw = limits.yaw_rate_radps
+    if rule_based.max_yaw_rate_radps > min(-yaw.low, yaw.high):
+        raise InvalidPushConfigError(
+            f"rule_based.max_yaw_rate_radps ({rule_based.max_yaw_rate_radps}) は "
+            f"commands.yaw_rate_radps [{yaw.low}, {yaw.high}] に左右とも収める必要がある"
+        )
+
+
+@dataclass(frozen=True)
+class PushTrainingRunConfig:
+    """高レベル方策の学習の実行条件。
+
+    Attributes:
+        seed: 学習に使う乱数シード。評価には別のシードを使う。
+        max_iterations: 学習の反復回数。正の整数。
+    """
+
+    seed: int
+    max_iterations: int
+
+    def __post_init__(self) -> None:
+        _check.positive("training.max_iterations", self.max_iterations)

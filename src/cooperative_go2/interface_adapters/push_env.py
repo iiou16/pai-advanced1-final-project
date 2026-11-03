@@ -15,8 +15,13 @@ from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_termination import exceeds_tilt_limit
 from cooperative_go2.entities.go2_state import Go2State, sample_reset_dof_pos
 from cooperative_go2.entities.push_evaluation import goal_distance_m
-from cooperative_go2.entities.push_layout import sample_push_layout
-from cooperative_go2.entities.push_observation import PlanarBodyState, PushObservationInputs, build_push_observation
+from cooperative_go2.entities.push_layout import PushLayout, sample_push_layout
+from cooperative_go2.entities.push_observation import (
+    PlanarBodyState,
+    PushObservationInputs,
+    PushTaskSnapshot,
+    build_push_observation,
+)
 from cooperative_go2.entities.push_reward import PUSH_REWARD_TERM_NAMES, PushRewardInputs, compute_push_reward_terms
 from cooperative_go2.entities.push_success import advance_goal_hold_steps, has_held_goal, is_in_goal_region
 from cooperative_go2.entities.push_task_config import PushTaskConfig, require_compatible_with_gait
@@ -77,8 +82,8 @@ class PushSimulation(Protocol):
         """直前の物理ステップで物理計算が発散した環境のマスク (num_envs,) を返す。"""
         ...
 
-    def reset(self, mask: torch.Tensor, dof_pos: torch.Tensor, box_xy_m: torch.Tensor) -> None:
-        """mask が True の環境の Go2 を初期位置・関節角 dof_pos で、箱を box_xy_m (num_envs, 2) に水平に置く。"""
+    def reset(self, mask: torch.Tensor, dof_pos: torch.Tensor, layout: PushLayout) -> None:
+        """mask が True の環境の Go2 を初期位置・関節角 dof_pos で、箱を layout の位置に水平に置く。"""
         ...
 
 
@@ -110,6 +115,7 @@ class PushStepOutcome:
         termination_reasons: 環境ごとの終了理由 (num_envs,)。PushTerminationReason の値。
         reward_terms: 係数を掛けた報酬の項の名前 → 値 (num_envs,)。
         episode_summary: このステップで終わったエピソードの集計。終わった環境が無ければ None。
+        pre_reset: 物理を進めた直後、リセットする前の Go2・箱・目標の位置。終わったエピソードの最終状態の記録に使う。
     """
 
     observation: torch.Tensor
@@ -118,6 +124,7 @@ class PushStepOutcome:
     termination_reasons: torch.Tensor
     reward_terms: dict[str, torch.Tensor]
     episode_summary: EpisodeSummary | None
+    pre_reset: PushTaskSnapshot
 
 
 class Go2PushEnv:
@@ -174,6 +181,16 @@ class Go2PushEnv:
         self._pending_joint_targets = simulation.default_dof_pos.expand(self.num_envs, -1).clone()
         self.reset()
 
+    @property
+    def gait_steps_per_high_level_step(self) -> int:
+        """高レベル方策の 1 ステップで、歩行方策を呼んで物理を進める回数。"""
+        return self._gait_steps
+
+    @property
+    def task_snapshot(self) -> PushTaskSnapshot:
+        """現在の Go2・箱・目標の位置（各環境の原点から見たワールド座標系の水平面）。規則ベースの制御と評価に使う。"""
+        return PushTaskSnapshot(robot=self._robot, box=self._box, goal_xy_m=self._goal_xy)
+
     def get_observations(self) -> TensorDict:
         """現在の観測を RSL-RL の観測グループの形で返す。"""
         return TensorDict({POLICY_OBSERVATION_GROUP: self._observation}, batch_size=[self.num_envs])
@@ -214,14 +231,18 @@ class Go2PushEnv:
             self.cfg.divergence,
         )
         self.episode_length_buf += 1
-        reasons = self._classify_terminations(diverged)
-        reward_terms = self._weighted_reward_terms(commands, reasons, diverged)
+        in_goal = is_in_goal_region(self._box.position_xy_m, self._goal_xy, self.cfg.success.goal_radius_m)
+        self._hold_steps = advance_goal_hold_steps(self._hold_steps, in_goal)
+        flags = self._termination_flags(diverged)
+        reasons = classify_push_terminations(flags)
+        reward_terms = self._weighted_reward_terms(commands, flags, reasons)
         self._rewards.add_step(reward_terms)
         done = reasons != int(PushTerminationReason.NONE)
         episode_summary = self._rewards.summarize_completed_or_none(done, reasons)
         self._previous_goal_distance = goal_distance_m(self._box.position_xy_m, self._goal_xy)
         self._previous_box_yaw = self._box.yaw_rad
         self._last_commands = commands
+        pre_reset = self.task_snapshot
         self._reset_envs(done)
         self._observation = self._observe()
         return PushStepOutcome(
@@ -231,6 +252,7 @@ class Go2PushEnv:
             termination_reasons=reasons,
             reward_terms=reward_terms,
             episode_summary=episode_summary,
+            pre_reset=pre_reset,
         )
 
     def _walk(self, commands: torch.Tensor) -> torch.Tensor:
@@ -249,26 +271,22 @@ class Go2PushEnv:
             self._go2_state = self._simulation.read_go2_state()
         return diverged
 
-    def _classify_terminations(self, diverged: torch.Tensor) -> torch.Tensor:
-        in_goal = is_in_goal_region(self._box.position_xy_m, self._goal_xy, self.cfg.success.goal_radius_m)
-        self._hold_steps = advance_goal_hold_steps(self._hold_steps, in_goal)
+    def _termination_flags(self, diverged: torch.Tensor) -> PushTerminationFlags:
         episode = self.cfg.episode
         arena = self.cfg.arena
-        self._fallen = exceeds_tilt_limit(self._go2_state.base_euler_deg, episode.fall_roll_deg, episode.fall_pitch_deg)
         out_of_bounds = is_outside_arena(self._robot.position_xy_m, arena) | is_outside_arena(
             self._box.position_xy_m, arena
         )
-        flags = PushTerminationFlags(
+        return PushTerminationFlags(
             time_out=self.episode_length_buf >= self.max_episode_length,
             succeeded=has_held_goal(self._hold_steps, self._required_hold_steps),
-            fallen=self._fallen,
+            fallen=exceeds_tilt_limit(self._go2_state.base_euler_deg, episode.fall_roll_deg, episode.fall_pitch_deg),
             out_of_bounds=out_of_bounds,
             diverged=diverged,
         )
-        return classify_push_terminations(flags)
 
     def _weighted_reward_terms(
-        self, commands: torch.Tensor, reasons: torch.Tensor, diverged: torch.Tensor
+        self, commands: torch.Tensor, flags: PushTerminationFlags, reasons: torch.Tensor
     ) -> dict[str, torch.Tensor]:
         inputs = PushRewardInputs(
             previous_goal_distance_m=self._previous_goal_distance,
@@ -281,13 +299,13 @@ class Go2PushEnv:
             previous_box_yaw_rad=self._previous_box_yaw,
             box_yaw_rad=self._box.yaw_rad,
             # 転倒の減点は、同じステップでシーン外への離脱などが優先されても与える（転倒したこと自体は変わらないため）
-            fallen=self._fallen,
+            fallen=flags.fallen,
             unsafe_collision=torch.zeros_like(self._box_contact),
             commands=commands,
         )
         terms = compute_push_reward_terms(inputs, self.cfg.reward)
         # 発散した環境の状態は NaN になりうる。学習を止めずにそのエピソードだけを失敗として終えるため、報酬を 0 にする
-        return terms.weighted(self.cfg.reward.scales).zeroed_where(diverged).named()
+        return terms.weighted(self.cfg.reward.scales).zeroed_where(flags.diverged).named()
 
     def _reset_envs(self, mask: torch.Tensor) -> None:
         setup = self._setup
@@ -295,7 +313,7 @@ class Go2PushEnv:
         reset_dof_pos = sample_reset_dof_pos(
             self._simulation.default_dof_pos, self.num_envs, setup.gait.env.reset_joint_pos_noise_rad, setup.generator
         )
-        self._simulation.reset(mask, reset_dof_pos, layout.box_xy_m)
+        self._simulation.reset(mask, reset_dof_pos, layout)
         self._controller.reset_where(mask)
         self._go2_state = self._go2_state.reset_where(
             mask, self._simulation.initial_go2_state.with_dof_pos(reset_dof_pos)
