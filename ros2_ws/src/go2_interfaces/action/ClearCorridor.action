@@ -1,0 +1,21 @@
+# 箱を目標領域へ移す作業の依頼。座標はすべて header.frame_id の座標系。
+
+# --- goal ---
+std_msgs/Header header
+# 目標領域の中心 [m]（z は使わない）
+geometry_msgs/Point goal_position
+# 目標領域の半径 [m]
+float64 goal_radius_m
+---
+# --- result ---
+bool success
+# 終わった理由（例: SUCCESS、CANCELED）
+string termination_reason
+# 依頼を受けてから終わるまでのシミュレーション時間 [s]
+float64 elapsed_sim_s
+---
+# --- feedback ---
+# 箱の中心から目標領域の中心までの距離 [m]
+float64 box_goal_distance_m
+# 箱の中心が目標領域に入ったままの時間 [s]
+float64 in_goal_duration_s
