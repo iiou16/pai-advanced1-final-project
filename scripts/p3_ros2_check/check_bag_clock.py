@@ -1,6 +1,7 @@
-"""rosbag2 の記録から、配信された時刻が /clock と整合していることを確かめる（T04、P3-03）。
+"""rosbag2 の記録から、配信された時刻が /clock と整合していることを確かめる。
 
 確かめること:
+- 期待するトピック（MESSAGE_TYPES）がすべて記録されている。
 - /clock が単調に増える（巻き戻らない）。
 - 状態・指令・TF のヘッダの時刻が、どれも /clock で配信された時刻のいずれかである（独自の時計で打刻していない）。
 - 指令（cmd_vel・joint_targets）の時刻が、記録した時点までに配信された最新の /clock より先に進んでいない。
@@ -61,8 +62,13 @@ class BagReport:
     clock_rewinds: int = 0
     topics: dict[str, TopicReport] = field(default_factory=dict)
 
+    def missing_topics(self) -> list[str]:
+        """期待するトピックのうち、記録に 1 件も無いもの。"""
+        expected = set(MESSAGE_TYPES) - {CLOCK_TOPIC}
+        return sorted(expected - self.topics.keys())
+
     def passed(self) -> bool:
-        if self.clock_messages == 0 or self.clock_rewinds > 0:
+        if self.clock_messages == 0 or self.clock_rewinds > 0 or self.missing_topics():
             return False
         for name, topic in self.topics.items():
             if topic.messages == 0 or topic.stamps_not_on_clock > 0:
@@ -122,7 +128,8 @@ def main() -> None:
     args = parser.parse_args()
     reports = [check_bag(bag) for bag in args.bags]
     for report in reports:
-        print(json.dumps({**asdict(report), "passed": report.passed()}, ensure_ascii=False, indent=2))
+        summary = {**asdict(report), "missing_topics": report.missing_topics(), "passed": report.passed()}
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
     if not all(report.passed() for report in reports):
         print("/clock と整合しない時刻がある", file=sys.stderr)
         sys.exit(1)

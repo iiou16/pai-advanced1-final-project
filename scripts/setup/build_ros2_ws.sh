@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ros2_ws の ament パッケージ（独自の msg / action）をビルドする。リポジトリのルートで実行する。
-#   bash scripts/setup/build_ros2_ws.sh
+# ros2_ws の ament パッケージ（独自の msg / action）をビルドする。どのディレクトリから実行してもよい。
+#   bash scripts/setup/build_ros2_ws.sh [colcon build の追加の引数]
 # 学習用 venv の python が PATH の先頭にあると、rosidl のコード生成がシステムの python3 の
 # モジュール（empy など）を見つけられずに失敗するため、venv を PATH から外してからビルドする。
 set -euo pipefail

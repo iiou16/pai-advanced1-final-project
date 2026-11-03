@@ -1,4 +1,4 @@
-"""方策のノードを止めるとロボットが止まることを確かめる（要件 5.5、5.6、P3-05）。
+"""方策のノードを止めるとロボットが止まり、制御が ROS 2 の通信を経由していることを確かめる。
 
 launch で 1 試行を始め、Go2 が歩き出したら高レベル方策のノードを止める。速度指令が有効期限を過ぎると、
 歩行方策は停止の指令で歩くので、Go2 はその場で立ち止まる。続けて歩行方策のノードを止める。関節目標が有効期限を
@@ -49,7 +49,7 @@ STANDING_HEIGHT_M = 0.2
 SETTLE_S = 1.5
 # 止まったかを測るシミュレーション時間 [s]
 MEASURE_S = 1.5
-# 動画を撮ると実時間比が 0.15 程度まで下がり、20 s の試行に 2 分以上かかるため長めに取る
+# 動画を撮ると実時間比が 0.1〜0.14 程度まで下がり、20 s の試行に 2〜3 分かかるため長めに取る
 WAIT_TIMEOUT_S = 600.0
 POLL_S = 0.05
 
@@ -125,7 +125,8 @@ def _is_walking(recorder: OdomRecorder) -> bool:
 
 def _stop_process(pattern: str) -> None:
     # launch が起動した方策のノードに SIGINT を送る（ros2 の通常の停止と同じ）
-    pids = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True, check=True).stdout.split()
+    # pgrep は一致するプロセスが無いと終了コード 1 を返すので、終了コードではなく出力で判定する
+    pids = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True, check=False).stdout.split()
     if not pids:
         raise RuntimeError(f"{pattern} のプロセスが見つからない")
     for pid in pids:
@@ -160,17 +161,25 @@ def main() -> None:
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     threading.Thread(target=executor.spin, daemon=True).start()
+    completed = False
     try:
         _wait_until(lambda: _is_walking(recorder), "Go2 が歩き出す")
         now = _sim_time_now(recorder)
         walking = recorder.measure(now - WALKING_WINDOW_S, now)
         coord_stopped_at, after_coord = _stop_and_measure(recorder, COORD_PROCESS_PATTERN)
         gait_stopped_at, after_gait = _stop_and_measure(recorder, GAIT_PROCESS_PATTERN)
+        completed = True
     finally:
+        if not completed:
+            # 確認の途中で失敗したら launch を止める（シミュレーションノードを残さない）
+            launch.send_signal(signal.SIGINT)
         launch.wait(timeout=WAIT_TIMEOUT_S)
         executor.shutdown()
         node.destroy_node()
         rclpy.try_shutdown()
+    if launch.returncode != 0:
+        print(f"launch が終了コード {launch.returncode} で終わった（シミュレーションノードの記録を確かめる）", file=sys.stderr)
+        sys.exit(1)
     result = {
         "walking_before_stop": asdict(walking),
         "coord_policy_stopped_at_sim_s": coord_stopped_at,
