@@ -45,6 +45,7 @@ from cooperative_go2.interface_adapters.push_env import Go2PushEnv, PushEnvSetup
 from cooperative_go2.interface_adapters.push_evaluation_adapters import (
     Go2PushEvaluationEnvironment,
     PolicyCommandSource,
+    PolicyConditionMismatchError,
     RuleBasedCommandSource,
     load_push_policy,
 )
@@ -122,7 +123,7 @@ def _command_source(args: argparse.Namespace, settings: PushTrainingSettings) ->
         return RuleBasedCommandSource(settings.rule_based, settings.task.success.goal_radius_m)
     if args.policy_run_dir is None or args.checkpoint is None:
         raise MissingPolicyArgumentsError("--algorithm policy には --policy-run-dir と --checkpoint が必要")
-    return PolicyCommandSource(load_push_policy(args.policy_run_dir, args.checkpoint, gs.device))
+    return PolicyCommandSource(load_push_policy(args.policy_run_dir, args.checkpoint, settings, gs.device))
 
 
 def _evaluate(
@@ -197,7 +198,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         results, env = _evaluate(args, settings, scene, output_dir)
     except (FileNotFoundError, ConfigValidationError, InvalidPushConfigError, MissingPolicyArgumentsError,
-            CheckpointNotFoundError, CheckpointLoadError) as error:  # fmt: skip
+            PolicyConditionMismatchError, CheckpointNotFoundError, CheckpointLoadError) as error:  # fmt: skip
         logger.error("評価の条件が不正: %s%s", error, left)
         sys.exit(EXIT_INVALID_INPUT)
     except SimulationSetupError as error:

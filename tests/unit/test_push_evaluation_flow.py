@@ -1,4 +1,5 @@
 import csv
+import dataclasses
 import json
 import math
 from pathlib import Path
@@ -6,6 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from cooperative_go2.entities.gait_config import ValueRange
 from cooperative_go2.entities.push_observation import PlanarBodyState, PushTaskSnapshot
 from cooperative_go2.entities.push_termination import PushTerminationReason
 from cooperative_go2.entities.push_trial import (
@@ -13,6 +15,11 @@ from cooperative_go2.entities.push_trial import (
     PlanarPose,
     PushEpisodeResult,
     summarize_push_trials,
+)
+from cooperative_go2.interface_adapters.config_loader import PushTrainingSettings, load_push_training_settings
+from cooperative_go2.interface_adapters.push_evaluation_adapters import (
+    PolicyConditionMismatchError,
+    require_same_policy_conditions,
 )
 from cooperative_go2.interface_adapters.push_evaluation_store import (
     TRIAL_COLUMNS,
@@ -196,3 +203,25 @@ def test_store_refuses_to_overwrite_existing_output(tmp_path: Path) -> None:
 
     with pytest.raises(PushEvaluationOutputExistsError):
         FilePushEvaluationStore(tmp_path / "e1-test").initialize()
+
+
+def _training_settings() -> PushTrainingSettings:
+    return load_push_training_settings(Path(__file__).resolve().parents[2] / "configs" / "push_single.yaml")
+
+
+def test_policy_conditions_allow_different_layout() -> None:
+    trained = _training_settings()
+    wide = dataclasses.replace(trained.task.reset, goal_direction_deg=ValueRange(low=-60.0, high=60.0))
+    evaluated = dataclasses.replace(trained, task=dataclasses.replace(trained.task, reset=wide))
+
+    # 配置は汎化を確かめるために変えてよい
+    require_same_policy_conditions(trained, evaluated)
+
+
+def test_policy_conditions_reject_different_observation_scales() -> None:
+    trained = _training_settings()
+    scales = dataclasses.replace(trained.task.observation, position=trained.task.observation.position * 2)
+    evaluated = dataclasses.replace(trained, task=dataclasses.replace(trained.task, observation=scales))
+
+    with pytest.raises(PolicyConditionMismatchError, match="task.observation"):
+        require_same_policy_conditions(trained, evaluated)

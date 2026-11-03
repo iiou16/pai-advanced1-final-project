@@ -16,7 +16,8 @@ from cooperative_go2.interface_adapters.genesis_push_simulation import GenesisPu
 from cooperative_go2.interface_adapters.push_env import Go2PushEnv, PushEnvSetup
 from cooperative_go2.use_cases.train_gait import RunAlreadyExistsError
 
-# 出力先に複製する設定ファイルの名前。評価時はこれらを読み、学習時と同じ条件で環境を作る
+# 出力先に複製する設定ファイルの名前。評価時は push_single.yaml の写しから方策のネットワーク構成を読み、
+# 評価の設定と学習時の条件が食い違っていないかを確かめる。scene.yaml は学習時のシーンの記録として残す
 PUSH_RUN_CONFIG_FILENAME = "push_single.yaml"
 PUSH_RUN_SCENE_CONFIG_FILENAME = "scene.yaml"
 
