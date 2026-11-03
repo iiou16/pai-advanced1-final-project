@@ -75,6 +75,23 @@ git clone --depth 1 --branch v1.4.5 https://github.com/Genesis-Embodied-AI/genes
 | ros-jazzy-desktop | 0.11.0 |
 | ros-jazzy-rclpy | 7.1.12 |
 | ros-dev-tools | 1.0.3 |
+| ros-jazzy-rosbag2-storage-mcap | 0.26.11 |
+| python3-colcon-common-extensions | 0.3.0 |
+| python3-empy | 3.3.4 |
+
+上の後 3 つは `ros-jazzy-desktop` と `ros-dev-tools` の依存として入る（rosbag2 の mcap 形式の記録、`ros2_ws` のビルド、独自の msg / action のコード生成に使う）。
+
+### 独自の msg / action（ros2_ws）のビルド
+
+ROS 2 を経由した実行（README の「ROS 2 を経由した箱押し」）の前に、`ros2_ws/src/go2_interfaces` をビルドする。
+
+```bash
+bash scripts/setup/build_ros2_ws.sh
+```
+
+- 学習用 venv を有効にしたシェルでそのまま `colcon build` すると、venv の python3 が使われ、rosidl のコード生成がシステムの python3 のモジュール（empy）を見つけられずに `ModuleNotFoundError: No module named 'em'` で止まる。スクリプトは venv を PATH から外してビルドする。
+- ビルド後は `/opt/ros/jazzy/setup.bash` に続けて `ros2_ws/install/setup.bash` を source すると、venv から `go2_interfaces` の型を import できる。
+- ROS 2 を source したシェルで pytest を動かすと、apt の `launch_testing` が pytest のプラグインとして読み込まれ、venv に無い依存（`lark`）で止まる。`pyproject.toml` の `addopts` で読み込まないようにしている。
 
 ## 5. 動作確認
 
