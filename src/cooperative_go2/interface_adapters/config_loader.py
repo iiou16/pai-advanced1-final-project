@@ -13,6 +13,7 @@ import yaml
 
 from cooperative_go2.entities.command_expiry import CommandExpiryConfig
 from cooperative_go2.entities.config_validation import ConfigValueChecker, InvalidConfigError
+from cooperative_go2.entities.corridor_scene_config import CorridorSceneConfig
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_evaluation import GaitEvaluationSuite, InvalidEvaluationScenarioError
 from cooperative_go2.entities.push_config import RuleBasedPushConfig
@@ -28,6 +29,8 @@ from cooperative_go2.interface_adapters.rsl_rl_config import RslRlPpoConfig
 _ROOT_KEY_PATH = "<root>"
 # 歩行の設定ファイルのうち、RSL-RL 固有の設定を書く節の名前
 RSL_RL_SECTION = "rsl_rl"
+# シーンの設定ファイルのうち、Genesis 固有の設定を書く節の名前
+GENESIS_SECTION = "genesis"
 
 
 class ConfigValidationError(ValueError):
@@ -55,6 +58,18 @@ class PushSceneSettings:
     def __post_init__(self) -> None:
         # 箱の摩擦はドメインとしては正の値なら意味を持つが、Genesis が受け付ける範囲は狭いため、ここで早めに弾く
         require_genesis_friction("box.friction", self.box.friction)
+
+
+@dataclass(frozen=True)
+class CorridorSceneSettings:
+    """通路のシーンの設定ファイル 1 つ分。scene は内側の層に渡し、genesis はシーンの構築にだけ使う。"""
+
+    scene: CorridorSceneConfig
+    genesis: GenesisSceneConfig
+
+    def __post_init__(self) -> None:
+        # 箱の摩擦はドメインとしては正の値なら意味を持つが、Genesis が受け付ける範囲は狭いため、ここで早めに弾く
+        require_genesis_friction("box.friction", self.scene.box.friction)
 
 
 @dataclass(frozen=True)
@@ -206,6 +221,30 @@ def load_push_scene_settings(path: Path) -> PushSceneSettings:
         ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
     """
     return parse_push_scene_settings(_read_yaml(path))
+
+
+def load_corridor_scene_settings(path: Path) -> CorridorSceneSettings:
+    """通路のシーンの設定ファイル（configs/scenes/s2_corridor.yaml 形式）を読み込み、検証済みの設定を返す。
+
+    genesis 節だけを Genesis の設定として分け、残りの節を通路のシーンの配置として読む。
+
+    Args:
+        path: 設定ファイル。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
+    """
+    mapping = _require_type(_read_yaml(path), dict, _ROOT_KEY_PATH)
+    if GENESIS_SECTION not in mapping:
+        raise ConfigValidationError(f"{_ROOT_KEY_PATH}: キー {GENESIS_SECTION!r} が無い")
+    scene_data = {key: value for key, value in mapping.items() if key != GENESIS_SECTION}
+    genesis = _build_dataclass(GenesisSceneConfig, mapping[GENESIS_SECTION], GENESIS_SECTION)
+    scene = _build_dataclass(CorridorSceneConfig, scene_data, _ROOT_KEY_PATH)
+    try:
+        return CorridorSceneSettings(scene=scene, genesis=genesis)
+    except InvalidConfigError as error:
+        raise ConfigValidationError(f"{path}: {error}") from error
 
 
 def load_push_training_settings(path: Path) -> PushTrainingSettings:
