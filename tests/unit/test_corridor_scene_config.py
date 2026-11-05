@@ -26,7 +26,7 @@ def valid_scene() -> CorridorSceneConfig:
         box=BoxConfig(size_m=(0.4, 1.0, 0.3), mass_kg=2.0, friction=1.0, initial_xy_m=(1.4, 0.0)),
         corridor=CorridorConfig(entrance_x_m=1.0, exit_x_m=2.0, center_y_m=0.0, width_m=1.4, apron_m=0.7),
         walls=WallConfig(height_m=0.5, outer_half_extent_y_m=4.0),
-        retreat_area=RetreatAreaConfig(center_xy_m=(3.6, 0.0), radius_m=0.4),
+        retreat_area=RetreatAreaConfig(center_xy_m=(3.8, 0.0), radius_m=0.4),
         robots=(RobotPlacement(name="go2_a", initial_xy_m=(0.7, 0.0)),),
     )
 
@@ -76,15 +76,22 @@ def test_rejects_box_that_does_not_block_corridor(valid_scene: CorridorSceneConf
 
 @pytest.mark.parametrize(
     ("center", "radius"),
-    # 通行領域の中、出口側の端（x = 2.7）に円の縁が届く
-    [((2.0, 0.0), 0.4), ((3.1, 0.0), 0.4)],
-    ids=["inside-region", "touching-region"],
+    # 通行領域の中、円の縁が通行領域の端に届く、円は離れているが縁に置いた箱（対角線の半分 ≈ 0.539）が回ると掛かる
+    [((2.0, 0.0), 0.4), ((3.1, 0.0), 0.4), ((3.6, 0.0), 0.4)],
+    ids=["inside-region", "circle-touching-region", "rotated-box-at-rim-reaches-region"],
 )
 def test_rejects_retreat_area_overlapping_passage_region(
     valid_scene: CorridorSceneConfig, center: tuple[float, float], radius: float
 ) -> None:
     with pytest.raises(InvalidCorridorSceneConfigError):
         dataclasses.replace(valid_scene, retreat_area=RetreatAreaConfig(center_xy_m=center, radius_m=radius))
+
+
+def test_accepts_retreat_area_with_room_for_rotated_box(valid_scene: CorridorSceneConfig) -> None:
+    # 円の縁 3.3 から箱の対角線の半分を引いても 2.761 > 2.7（通行領域の出口側の端）
+    scene = dataclasses.replace(valid_scene, retreat_area=RetreatAreaConfig(center_xy_m=(3.7, 0.0), radius_m=0.4))
+
+    assert scene.retreat_area.center_xy_m == (3.7, 0.0)
 
 
 def test_rejects_duplicate_robot_names(valid_scene: CorridorSceneConfig) -> None:

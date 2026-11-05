@@ -8,6 +8,8 @@
 
 from dataclasses import dataclass
 
+import math
+
 import torch
 
 from cooperative_go2.entities.config_validation import ConfigValueChecker, InvalidConfigError
@@ -90,7 +92,8 @@ class CorridorSceneConfig:
         box: 通路をふさぐ箱。初期位置で箱が通行領域と重なる（通路が閉じている）こと。箱は回転させずに置く。
         corridor: 通路の形と通行領域。
         walls: 通路の両側の壁。
-        retreat_area: 箱を押し出す先。円全体が通行領域の外にあること（退避領域に入れても通路が閉じたままにならない）。
+        retreat_area: 箱を押し出す先。箱の中心が円のどこにあっても、箱がどの向きでも、箱が通行領域と重ならないこと
+            （箱の中心を退避領域に入れれば、通路が必ず開いている）。
         robots: 置く Go2 の名前と初期位置。1 台以上で、名前は重複しない。
     """
 
@@ -126,11 +129,17 @@ class CorridorSceneConfig:
     def _require_retreat_area_outside_passage_region(self) -> None:
         region = self.corridor.passage_region()
         center_x, center_y = self.retreat_area.center_xy_m
-        # 円の中心から通行領域（長方形）までの最短距離が半径より大きければ、円全体が外にある
+        # 箱の中心から最も遠い点（角）までの距離。箱がどの向きでも、箱は中心からこの距離の円に収まる
+        size_x, size_y, _ = self.box.size_m
+        box_half_diagonal_m = math.hypot(size_x / 2, size_y / 2)
+        # 円の中心から通行領域（長方形）までの最短距離が、半径と箱の対角線の半分の和より大きければ、
+        # 箱の中心が円の中のどこにあっても箱は通行領域に掛からない（接するだけでも重なりとみなすので等号は不可）
         nearest_x = min(max(center_x, region.min_x_m), region.max_x_m)
         nearest_y = min(max(center_y, region.min_y_m), region.max_y_m)
-        distance = ((center_x - nearest_x) ** 2 + (center_y - nearest_y) ** 2) ** 0.5
-        if distance <= self.retreat_area.radius_m:
+        distance = math.hypot(center_x - nearest_x, center_y - nearest_y)
+        required_m = self.retreat_area.radius_m + box_half_diagonal_m
+        if distance <= required_m:
             raise InvalidCorridorSceneConfigError(
-                f"退避領域が通行領域と重なる（通行領域までの距離 {distance:.3f} m ≤ 半径 {self.retreat_area.radius_m} m）"
+                f"退避領域に入れた箱が通行領域に掛かりうる（通行領域までの距離 {distance:.3f} m ≤ "
+                f"半径 {self.retreat_area.radius_m} m ＋ 箱の対角線の半分 {box_half_diagonal_m:.3f} m）"
             )
