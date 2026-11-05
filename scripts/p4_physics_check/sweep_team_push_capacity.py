@@ -1,10 +1,10 @@
-"""Go2 が 1 台・2 台で押して動かせる箱の質量を測る（P4-07 の重い箱の校正の前段）。
+"""Go2 が 1 台・2 台で押して動かせる箱の質量を、壁の無い平面で測る（重い箱の質量を決めるため）。
 
 協調の手順（位置合わせ・同時開始）の出来に左右されずに物理的な押す力の上限だけを比べるため、
 ロボットを箱の後ろに並べて置き、全員に同じ前進の指令を出し続ける（向きだけを +x に保つ）。
 質量と指令の速さを変えて、決めた時間内の箱の移動量・回転・ロボットの転倒を並列環境ごとに記録する。
 
-- 箱は 2 台が横に並んで押せる幅にする。1 台の条件も同じ箱を中央から押す（E3 と同じ箱にするため）。
+- 箱は 2 台が横に並んで押せる幅にする。1 台の条件も同じ箱を中央から押す（1 台と 2 台を同じ箱で比べるため）。
 - 箱と床の摩擦は床（歩行の学習時の Genesis の既定値 1.0）と同じにする。大きい方が使われるため、これより下げられない。
 - 指令の速さは、規則ベースの押す速さ（0.3 m/s）、高レベル方策の指令の上限（0.6 m/s）、歩行方策が学習した上限（1.0 m/s）。
   1 台が押せないことを、弱い指令のときだけで判断しないため。
@@ -264,7 +264,7 @@ def summarize(rows: list[TrialRow]) -> None:
     groups: dict[tuple[float, float], list[TrialRow]] = {}
     for row in rows:
         groups.setdefault((row.mass_kg, row.command_vx_mps), []).append(row)
-    print("台数 質量[kg] 指令[m/s] 移動量 平均/最小/最大[m] 前半[m] 最大ヨー[deg] 転倒率")
+    print("台数 質量[kg] 指令[m/s] 移動量 平均/最小/最大[m] 前半[m] 箱のヨーの最大 試行平均/全体[deg] 転倒率")
     for (mass_kg, speed), group in sorted(groups.items()):
         dx = [row.box_dx_m for row in group]
         half = [row.box_dx_half_m for row in group]
@@ -273,7 +273,7 @@ def summarize(rows: list[TrialRow]) -> None:
         print(
             f"{group[0].num_robots} {mass_kg:>5} {speed:>5} "
             f"{sum(dx) / len(dx):6.3f}/{min(dx):6.3f}/{max(dx):6.3f} {sum(half) / len(half):6.3f} "
-            f"{sum(yaw) / len(yaw):6.1f} {fall_rate:5.2f}"
+            f"{sum(yaw) / len(yaw):6.1f}/{max(yaw):6.1f} {fall_rate:5.2f}"
         )
 
 

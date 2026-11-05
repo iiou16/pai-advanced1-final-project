@@ -1,8 +1,8 @@
-"""通路のシーンで、Go2 が押して動かせる箱の質量と、通路を開けられるかを測る（D30 の重い箱を壁のある通路で確かめる）。
+"""通路のシーンで、Go2 が押して動かせる箱の質量と、通路を開けられるかを測る（重い箱の質量を壁のある通路で確かめる）。
 
 平面での計測（sweep_team_push_capacity.py）と同じく、協調の手順の出来に左右されずに押す力の上限だけを比べるため、
 全ロボットに同じ前進の指令を出し続ける（向きだけを +x に保つ）。通路の壁との接触は箱を止める摩擦にも、
-回転を抑えるガイドにもなりうるため、E3〜E5 を行う通路で測り直す。
+回転を抑えるガイドにもなりうるため、1 台と 2 台を比べる通路で測り直す。
 台数とロボットの配置はシーンの設定（s2_corridor.yaml は 1 台、s3_team.yaml は 2 台）で決め、質量だけを書き換えて変える。
 
 実行（Genesis を cuda で使う前に、同じシェルで source scripts/setup/env.sh する）:
@@ -192,7 +192,7 @@ def summarize(rows: list[TrialRow]) -> None:
     groups: dict[tuple[float, float], list[TrialRow]] = {}
     for row in rows:
         groups.setdefault((row.mass_kg, row.command_vx_mps), []).append(row)
-    print("台数 質量[kg] 指令[m/s] 移動量 平均/最小/最大[m] 最大ヨー[deg] 開通率 開通までの平均[s] 転倒率")
+    print("台数 質量[kg] 指令[m/s] 移動量 平均/最小/最大[m] 箱のヨーの最大 試行平均/全体[deg] 開通率 開通までの平均[s] 転倒率")
     for (mass_kg, speed), group in sorted(groups.items()):
         dx = [row.box_dx_m for row in group]
         yaw = [row.box_max_abs_yaw_deg for row in group]
@@ -201,7 +201,7 @@ def summarize(rows: list[TrialRow]) -> None:
         fall_rate = sum(row.robot_fell for row in group) / len(group)
         print(
             f"{group[0].num_robots} {mass_kg:>5} {speed:>5} "
-            f"{sum(dx) / len(dx):6.3f}/{min(dx):6.3f}/{max(dx):6.3f} {sum(yaw) / len(yaw):6.1f} "
+            f"{sum(dx) / len(dx):6.3f}/{min(dx):6.3f}/{max(dx):6.3f} {sum(yaw) / len(yaw):6.1f}/{max(yaw):6.1f} "
             f"{len(open_times) / len(group):5.2f} {mean_open_time} {fall_rate:5.2f}"
         )
 
