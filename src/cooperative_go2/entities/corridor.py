@@ -143,13 +143,15 @@ class PassageStage(IntEnum):
     """Go2 の通過の判定の段階。PASSED になったら、そのエピソードの間は戻らない。
 
     - WAITING: 通路が開いた状態で入口側（通行領域の入口側の端より手前）にいたことがまだない。
-    - ELIGIBLE: 通路が開いた状態で入口側にいた。ここから出口側の端を越えたら通過とする。
+    - ELIGIBLE: 通路が開いた状態で入口側にいた。ここから通路（両側の壁の間）に入れば IN_CORRIDOR になる。
+    - IN_CORRIDOR: 入口側から通路に入った。ここから通路の幅の中で通行領域の出口側の端を越えたら通過とする。
     - PASSED: 通過した。
     """
 
     WAITING = 0
     ELIGIBLE = 1
-    PASSED = 2
+    IN_CORRIDOR = 2
+    PASSED = 3
 
 
 def advance_passage_stage(
@@ -157,13 +159,17 @@ def advance_passage_stage(
 ) -> torch.Tensor:
     """1 ステップ進めた後の通過の判定の段階 (num_envs,) を返す。
 
-    「通路が開いたあとに入口から出口まで通った」ことを、次の 2 段で判定する。
+    「通路が開いたあとに入口から通路の中を通って出口まで通った」ことを、次の段で判定する。
     通路が開く前から通路の中にいたロボット（箱を押していたロボットなど）は、いったん入口側へ戻るまで数えない。
-    開通と通過を別の指標として数えるため。
+    開通と通過を別の指標として数えるため。通路の中を通ったことを確かめるのは、壁の外を回り込んで
+    出口側へ出る経路を通過に数えないため。
 
     1. 通路が開いている間に、胴体の x が通行領域の入口側の端以下になったら ELIGIBLE にする。y は問わない。
-    2. ELIGIBLE のロボットの胴体の x が通行領域の出口側の端以上になり、そのとき y が通路の幅に収まっていれば PASSED にする。
-       通路が開いている必要はない（入口側にいた時点で開いていれば、通っている途中で箱が戻ってきても通過を妨げない）。
+    2. ELIGIBLE のロボットの胴体が通路（x が入口から出口の間、y が通路の幅の中）に入ったら IN_CORRIDOR にする。
+    3. IN_CORRIDOR のロボットが通路の入口より手前へ戻ったら ELIGIBLE に戻す（入口から出て壁の外を回り込ませないため）。
+    4. IN_CORRIDOR のロボットの胴体の x が通行領域の出口側の端以上になり、そのとき y が通路の幅に収まっていれば
+       PASSED にする。2〜4 では通路が開いている必要はない（入口側にいた時点で開いていれば、通っている途中で
+       箱が戻ってきても通過を妨げない）。
 
     Args:
         stages: 前のステップの段階 (num_envs,)。PassageStage の値の整数型。エピソードの最初は WAITING。
@@ -174,9 +180,19 @@ def advance_passage_stage(
     region = corridor.passage_region()
     robot_x = robot_xy_m[:, X_AXIS]
     robot_y = robot_xy_m[:, Y_AXIS]
+    within_width = (robot_y >= region.min_y_m) & (robot_y <= region.max_y_m)
     on_entrance_side = robot_x <= region.min_x_m
-    beyond_exit = (robot_x >= region.max_x_m) & (robot_y >= region.min_y_m) & (robot_y <= region.max_y_m)
-    becomes_eligible = (stages == PassageStage.WAITING) & corridor_open & on_entrance_side
-    becomes_passed = (stages == PassageStage.ELIGIBLE) & beyond_exit
-    advanced = torch.where(becomes_eligible, int(PassageStage.ELIGIBLE), stages)
-    return torch.where(becomes_passed, int(PassageStage.PASSED), advanced)
+    inside_corridor = (robot_x >= corridor.entrance_x_m) & (robot_x <= corridor.exit_x_m) & within_width
+    before_entrance = robot_x < corridor.entrance_x_m
+    beyond_exit = (robot_x >= region.max_x_m) & within_width
+    transitions = (
+        ((stages == PassageStage.WAITING) & corridor_open & on_entrance_side, PassageStage.ELIGIBLE),
+        ((stages == PassageStage.ELIGIBLE) & inside_corridor, PassageStage.IN_CORRIDOR),
+        ((stages == PassageStage.IN_CORRIDOR) & before_entrance, PassageStage.ELIGIBLE),
+        ((stages == PassageStage.IN_CORRIDOR) & beyond_exit, PassageStage.PASSED),
+    )
+    # 遷移の条件は元の段ごとに分かれているので、1 ステップで 2 段進むことはない
+    advanced = stages
+    for condition, next_stage in transitions:
+        advanced = torch.where(condition, int(next_stage), advanced)
+    return advanced

@@ -99,10 +99,17 @@ def test_corridor_is_open_only_after_box_leaves_passage_region() -> None:
         (PassageStage.WAITING, (1.5, 0.0), True, PassageStage.WAITING),
         # 開く前から通路にいて（箱を押して）出口を越えたロボットは数えない
         (PassageStage.WAITING, (2.6, 0.0), True, PassageStage.WAITING),
-        # 出口側の端と通路の幅の境界はどちらも含む。入口側にいた時点で開いていれば、通過のときは問わない
-        (PassageStage.ELIGIBLE, (2.5, 0.6), False, PassageStage.PASSED),
-        (PassageStage.ELIGIBLE, (2.6, 0.7), True, PassageStage.ELIGIBLE),
-        (PassageStage.ELIGIBLE, (1.5, 0.0), True, PassageStage.ELIGIBLE),
+        # 入口側にいた時点で開いていれば、通路に入るとき・通過のときは開いているかを問わない
+        (PassageStage.ELIGIBLE, (1.5, 0.0), False, PassageStage.IN_CORRIDOR),
+        (PassageStage.ELIGIBLE, (1.5, 0.7), True, PassageStage.ELIGIBLE),
+        # 通路に入らずに（壁の外を回り込んで）出口側へ出ても数えない
+        (PassageStage.ELIGIBLE, (2.6, 0.0), True, PassageStage.ELIGIBLE),
+        # 出口側の端と通路の幅の境界はどちらも含む
+        (PassageStage.IN_CORRIDOR, (2.5, 0.6), False, PassageStage.PASSED),
+        (PassageStage.IN_CORRIDOR, (2.6, 0.7), True, PassageStage.IN_CORRIDOR),
+        (PassageStage.IN_CORRIDOR, (2.2, 0.0), True, PassageStage.IN_CORRIDOR),
+        # 入口から通路の外へ戻ったら、もう一度通路に入るまで数えない
+        (PassageStage.IN_CORRIDOR, (0.9, 0.0), True, PassageStage.ELIGIBLE),
         (PassageStage.PASSED, (0.0, 0.0), False, PassageStage.PASSED),
     ],
     ids=[
@@ -110,9 +117,13 @@ def test_corridor_is_open_only_after_box_leaves_passage_region() -> None:
         "entrance-side-while-closed",
         "inside-corridor-when-opened",
         "pusher-beyond-exit",
+        "enters-corridor",
+        "beside-corridor-outside-width",
+        "went-around-walls",
         "crosses-exit-within-width",
         "crosses-exit-outside-width",
-        "still-inside-corridor",
+        "between-exit-and-region-end",
+        "backs-out-of-entrance",
         "passed-is-absorbing",
     ],
 )
@@ -127,9 +138,23 @@ def test_advance_passage_stage(
 
 
 def test_passage_stages_advance_per_environment() -> None:
-    stages = torch.tensor([int(PassageStage.WAITING), int(PassageStage.ELIGIBLE)])
+    stages = torch.tensor([int(PassageStage.WAITING), int(PassageStage.IN_CORRIDOR)])
     robot_xy = torch.tensor([[0.0, 0.0], [3.0, 0.0]])
 
     advanced = advance_passage_stage(stages, robot_xy, torch.tensor([True, True]), CORRIDOR)
 
     assert advanced.tolist() == [int(PassageStage.ELIGIBLE), int(PassageStage.PASSED)]
+
+
+def test_walk_from_entrance_side_through_corridor_passes() -> None:
+    # 開いた通路を入口側から出口側まで 0.1 m ずつ歩くと、途中で IN_CORRIDOR を経て PASSED になる
+    stage = torch.tensor([int(PassageStage.WAITING)])
+    seen = []
+    for step in range(31):
+        robot_xy = torch.tensor([[0.0 + 0.1 * step, 0.0]])
+        stage = advance_passage_stage(stage, robot_xy, torch.tensor([True]), CORRIDOR)
+        seen.append(PassageStage(int(stage[0])))
+
+    assert seen[0] is PassageStage.ELIGIBLE
+    assert PassageStage.IN_CORRIDOR in seen
+    assert seen[-1] is PassageStage.PASSED
