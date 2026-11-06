@@ -17,8 +17,13 @@ CMD_VEL_TOPIC = "cmd_vel"
 JOINT_TARGETS_TOPIC = "joint_targets"
 # シミュレーションノード → 歩行方策のノード（ロボットを初期姿勢に戻したことを伝える）
 GAIT_RESET_SERVICE = "gait_policy/reset"
-# 依頼者 → 高レベル方策のノード（1 台の構成ではシミュレーションノードが依頼者を兼ねる）
+# 依頼者 → 高レベル方策のノード（1 台の構成ではシミュレーションノードが依頼者を兼ねる。
+# 2 台の構成ではタスク管理のノードが各ロボットの協調のノードへ依頼する）
 CLEAR_CORRIDOR_ACTION = "clear_corridor"
+# 協調のノードの間で、作業の状態と押す意図を共有する
+AGENT_STATUS_TOPIC = "/team/agent_status"
+# 依頼者 → タスク管理のノード（2 台の構成。シミュレーションノードが試行ごとに依頼する）
+TASK_CLEAR_CORRIDOR_ACTION = "/task/clear_corridor"
 
 # 座標系の名前。WORLD_FRAME はシミュレーションのワールド座標系（真値）
 WORLD_FRAME = "map"
@@ -39,6 +44,13 @@ COMMAND_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
     durability=DurabilityPolicy.VOLATILE,
 )
+# 作業の状態。受け手が時刻で途絶えを判定するので、届いたものは順に使う
+TEAM_STATUS_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=10,
+    reliability=ReliabilityPolicy.RELIABLE,
+    durability=DurabilityPolicy.VOLATILE,
+)
 # /clock。rclpy の時刻の購読（best effort）とも、ros2 bag（reliable）とも互換にするため reliable で配信する
 CLOCK_QOS = QoSProfile(
     history=HistoryPolicy.KEEP_LAST,
@@ -46,6 +58,14 @@ CLOCK_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
     durability=DurabilityPolicy.VOLATILE,
 )
+
+
+def robot_topic(robot_name: str, topic: str) -> str:
+    """ロボットの名前（例: go2_a）の Namespace の下の、相対名 topic の絶対名（例: /go2_a/odom）を返す。
+
+    すべてのロボットのトピックを 1 つのノードで扱うシミュレーションノードが使う。
+    """
+    return f"/{robot_name}/{topic}"
 
 
 def robot_frame(namespace: str, frame: str) -> str:

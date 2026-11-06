@@ -29,6 +29,9 @@ go2-train-push = "cooperative_go2.frameworks.train_push:main"
 go2-ros2-sim = "cooperative_go2.frameworks.ros2_sim_node:main"
 go2-ros2-gait = "cooperative_go2.frameworks.ros2_gait_node:main"
 go2-ros2-coord = "cooperative_go2.frameworks.ros2_coord_node:main"
+go2-ros2-team-sim = "cooperative_go2.frameworks.ros2_team_sim_node:main"
+go2-ros2-team-coord = "cooperative_go2.frameworks.ros2_team_coord_node:main"
+go2-ros2-task-manager = "cooperative_go2.frameworks.ros2_task_manager_node:main"
 
 [dependency-groups]
 dev = ["pytest"]

@@ -2,7 +2,10 @@
 
 import pytest
 import torch
+from go2_interfaces.msg import AgentStatus
 from trajectory_msgs.msg import JointTrajectoryPoint
+
+from cooperative_go2.entities.coordination_state_machine import TeamPhase
 
 from cooperative_go2.entities.go2 import GO2_JOINT_NAMES
 from cooperative_go2.entities.rigid_body_pose import RigidBodyPose
@@ -18,6 +21,12 @@ from cooperative_go2.interface_adapters.ros2_messages import (
     read_odometry,
     read_twist_stamped,
     time_to_ns,
+)
+from cooperative_go2.interface_adapters.ros2_team_messages import (
+    AgentStatusReport,
+    UnknownTeamPhaseError,
+    make_agent_status,
+    read_agent_status,
 )
 
 STAMP_NS = 12_340_000_000 + 20_000_000
@@ -93,3 +102,24 @@ def test_twist_round_trip_uses_vx_vy_and_yaw_rate() -> None:
 
     assert read.stamp_ns == STAMP_NS
     assert torch.equal(read.values, commands)
+
+
+def test_agent_status_round_trip() -> None:
+    report = AgentStatusReport(
+        agent_id="go2_b", stamp_ns=STAMP_NS, phase=TeamPhase.PUSH, push_position_xy_m=(0.8, -0.25), push_dir_xy=(1.0, 0.0)
+    )
+
+    message = make_agent_status(report, "map")
+
+    assert message.ready is True
+    assert message.phase == 4
+    assert read_agent_status(message) == report
+    assert read_agent_status(message).to_partner_status().stamp_s == pytest.approx(12.36)
+
+
+def test_agent_status_with_unknown_phase_is_rejected() -> None:
+    message = AgentStatus()
+    message.phase = 9
+
+    with pytest.raises(UnknownTeamPhaseError):
+        read_agent_status(message)
