@@ -170,6 +170,17 @@ uv run --frozen python scripts/p3_ros2_check/check_bag_clock.py outputs/ros2_bag
 
 設定は `configs/ros2_team.yaml`（2 台）・`configs/ros2_team_single.yaml`（1 台）と、それが指す `configs/team_rule_based*.yaml`・`configs/scenes/s3_*.yaml`。
 
+E4 と E5 は、ロボットごとの制御を同じにし、ロボット同士の通信（`/team/agent_status`）を使うかどうかだけを変える（協調のノードの `mode`）。
+
+| | E4（`mode:=independent`） | E5（`mode:=cooperative`） |
+|---|---|---|
+| 押し始め | 自分の準備ができたらすぐ押し始める | 相手も READY か PUSH になるのを待ってから押し始める |
+| 相手が押すのをやめたとき（向きが外れた・転倒した・相手の状態が 0.5 s 届かない） | 1 台で押し続ける | 自分も押すのをやめて待つ |
+
+押す側（`go2_a` が左、`go2_b` が右）は設定で前もって決め、通信では決めない。箱の回転を戻す規則（2 台の押す線を遅れている側へずらす）は、
+箱の姿勢（`/team/object_state`、シミュレーションの真値でロボット同士の通信ではない）だけで判断できるので E4 にも残す。
+外すと、通信の効果と回転を戻す規則の効果が 1 つの比較に混ざるため。
+
 ```bash
 # 実行するシェルで毎回 source する（ros2_ws のビルドは 1 台の手順と同じ）
 source /opt/ros/jazzy/setup.bash
