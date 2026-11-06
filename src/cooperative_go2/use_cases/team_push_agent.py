@@ -186,10 +186,16 @@ class TeamPushAgent:
 
     def _lateral_offset(self, inputs: TeamPushAgentInputs) -> float:
         # 押している最中に相手が押す位置を直している間は、押す線を箱の中央へ寄せる。1 台で箱の片側だけを押して回さないため
+        readiness = TeamReadinessInputs(
+            own=self._state,
+            partner=inputs.partner,
+            now_s=inputs.now_s,
+            keep_pushing_while_partner_repositions=True,
+        )
         pushing_alone = (
             self._mode is CoordinationMode.COOPERATIVE
             and self._state.phase is TeamPhase.PUSH
-            and is_partner_repositioning(inputs.partner, inputs.now_s, self._config.team_readiness)
+            and is_partner_repositioning(readiness, self._config.team_readiness)
         )
         return 0.0 if pushing_alone else self._lateral_offset_m
 

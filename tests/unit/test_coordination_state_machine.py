@@ -345,15 +345,23 @@ def test_keep_pushing_does_not_change_start_condition() -> None:
 @pytest.mark.parametrize(
     ("partner", "now_s", "expected"),
     [
-        (PartnerStatus(phase=TeamPhase.ALIGN, stamp_s=1.0), 1.1, True),
-        (PartnerStatus(phase=TeamPhase.PUSH, stamp_s=1.0), 1.1, False),
-        (PartnerStatus(phase=TeamPhase.ALIGN, stamp_s=1.0), 1.6, False),
-        (None, 1.0, False),
+        (PartnerStatus(phase=TeamPhase.ALIGN, stamp_s=10.1), 10.2, True),
+        (PartnerStatus(phase=TeamPhase.APPROACH, stamp_s=10.1), 10.2, True),
+        (PartnerStatus(phase=TeamPhase.PUSH, stamp_s=10.1), 10.2, False),
+        # 自分が 10.0 s に PUSH に入った直後の相手の READY は、同じ合図で押し始める途中（通信の遅れ）
+        (PartnerStatus(phase=TeamPhase.READY, stamp_s=10.1), 10.2, False),
+        # 猶予（0.5 s）を過ぎても READY なら、押すのをやめて待っている
+        (PartnerStatus(phase=TeamPhase.READY, stamp_s=10.5), 10.6, True),
+        (PartnerStatus(phase=TeamPhase.ALIGN, stamp_s=10.0), 10.6, False),
+        (None, 10.2, False),
     ],
-    ids=["repositioning", "pushing", "stale", "never-received"],
+    ids=["align", "approach", "pushing", "ready-just-after-push-start", "ready-after-grace", "stale", "never-received"],
 )
 def test_is_partner_repositioning(partner: PartnerStatus | None, now_s: float, expected: bool) -> None:
-    assert is_partner_repositioning(partner, now_s, READINESS) is expected
+    own = in_phase(TeamPhase.PUSH, phase_started_s=10.0)
+    inputs = TeamReadinessInputs(own=own, partner=partner, now_s=now_s, keep_pushing_while_partner_repositions=True)
+
+    assert is_partner_repositioning(inputs, READINESS) is expected
 
 
 # 2 台の状態機械をつないだテスト。各ロボットは 0.1 s ごとに判断し、相手の状態は 1 回前の判断の結果を受け取る

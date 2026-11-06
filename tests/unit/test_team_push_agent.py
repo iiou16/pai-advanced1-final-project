@@ -158,3 +158,17 @@ def test_cooperative_agents_stop_when_partner_status_is_stale(
     decision = agent.decide(inputs(now_s + 1.0, PartnerStatus(phase=TeamPhase.PUSH, stamp_s=now_s + 0.4)))
 
     assert decision.state.phase is TeamPhase.READY
+
+
+def test_push_line_does_not_jump_to_center_when_partner_status_lags_at_push_start(
+    team_config: TeamRuleBasedConfig,
+) -> None:
+    agent = TeamPushAgent(team_config, robot_index=0, mode=CoordinationMode.COOPERATIVE)
+    now_s = run_until_pushing(agent)
+
+    # 押し始めた次の周期でも、相手の状態は 1 周期遅れてまだ READY に見える
+    decision = agent.decide(inputs(now_s + 0.1, PartnerStatus(phase=TeamPhase.READY, stamp_s=now_s)))
+
+    assert decision.state.phase is TeamPhase.PUSH
+    assert decision.push_position_xy_m == pytest.approx((0.8, 0.25))
+    assert float(decision.commands[0, 2]) == pytest.approx(0.0, abs=1e-6)

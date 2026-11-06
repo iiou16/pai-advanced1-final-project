@@ -100,11 +100,18 @@ def is_team_ready_with_partner(inputs: TeamReadinessInputs, config: TeamReadines
     return partner.phase in _PARTNER_PHASES_READY_TO_START
 
 
-def is_partner_repositioning(partner: PartnerStatus | None, now_s: float, config: TeamReadinessConfig) -> bool:
-    """相手の状態が届いていて（partner_stale_after_s 以内）、相手が押す位置を直している（APPROACH・ALIGN・READY）か。
+def is_partner_repositioning(inputs: TeamReadinessInputs, config: TeamReadinessConfig) -> bool:
+    """相手の状態が届いていて（partner_stale_after_s 以内）、相手が押す位置を直しているか。
 
+    相手が APPROACH・ALIGN なら直している。相手が READY のときは、自分が PUSH に入ってから push_start_grace_s を
+    過ぎていれば直している（押すのをやめて待っている）とみなす。猶予の間の READY は、相手が同じ合図で PUSH に入る
+    途中で、通信の遅れでまだ READY に見えているだけなので、直しているとはみなさない。
     相手の状態をまだ受け取っていない、または途絶えたなら False（直しているかどうか分からない）。
     """
-    if partner is None or now_s - partner.stamp_s > config.partner_stale_after_s:
+    partner = inputs.partner
+    if partner is None or inputs.now_s - partner.stamp_s > config.partner_stale_after_s:
         return False
-    return partner.phase in PARTNER_REPOSITIONING_PHASES
+    if partner.phase is not TeamPhase.READY:
+        return partner.phase in PARTNER_REPOSITIONING_PHASES
+    own = inputs.own
+    return own.phase is TeamPhase.PUSH and inputs.now_s - own.phase_started_s > config.push_start_grace_s
