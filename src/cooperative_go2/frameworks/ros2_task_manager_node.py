@@ -129,6 +129,8 @@ class TaskManagerNode:
         in_goal_since_ns: int | None = None
         while True:
             if self._stopping.is_set():
+                # タスク管理が先に終わっても、各ロボットが押し続けないよう依頼を取り消してから抜ける
+                self._cancel_all(tasks)
                 return self._result(False, "NODE_SHUTDOWN", start_ns)
             if goal_handle.is_cancel_requested:
                 self._cancel_all(tasks)

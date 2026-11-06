@@ -85,12 +85,17 @@ METRICS_FILENAME = "coord_policy_metrics.json"
 SPIN_TIMEOUT_S = 0.1
 EXIT_INVALID_INPUT = 2
 ROLL_COLUMN, PITCH_COLUMN = 0, 1
+COOPERATIVE_TEAM_SIZE = 2
 
 logger = logging.getLogger(__name__)
 
 
 class RobotNotInSceneError(ValueError):
     """ノードの Namespace のロボットが、シーンの設定の robots にいないことを表す。"""
+
+
+class CooperativeTeamSizeError(ValueError):
+    """協調のモードで、シーンのロボットが 2 台でないことを表す。相手の状態の判定は相手が 1 台だけの前提で作っている。"""
 
 
 @dataclass
@@ -119,9 +124,13 @@ class TeamCoordNode:
         names = [robot.name for robot in run.scene.scene.robots]
         if self._robot_name not in names:
             raise RobotNotInSceneError(f"Namespace のロボット {self._robot_name!r} がシーンの robots {names} にいない")
+        if mode is not CoordinationMode.INDEPENDENT and len(names) != COOPERATIVE_TEAM_SIZE:
+            raise CooperativeTeamSizeError(f"協調のモード {mode.value} はロボット 2 台で動かす: {names}")
         team = run.settings.team
         self._team = team
         self._mode = mode
+        # 相手の状態として受け取るのは、シーンの設定の自分以外のロボットだけ（協調のモードでは 2 台なので 1 台）
+        self._partner_names = frozenset(name for name in names if name != self._robot_name)
         self._agent = TeamPushAgent(team, names.index(self._robot_name), mode)
         self._period_ns = seconds_to_ns(team.high_level_period_s)
         self._frame = robot_frame(node.get_namespace(), BASE_LINK_FRAME)
@@ -163,7 +172,8 @@ class TeamCoordNode:
 
     def _on_agent_status(self, message: AgentStatus) -> None:
         report = read_agent_status(message)
-        if report.agent_id == self._robot_name:
+        # 自分と、シーンにいないロボットの状態は使わない（別の構成のノードの配信を相手と取り違えないため）
+        if report.agent_id not in self._partner_names:
             return
         with self._lock:
             # 遅れて届いた古い状態で、新しい状態を上書きしない
@@ -198,9 +208,10 @@ class TeamCoordNode:
                 # ノードを終える（launch の終了）。依頼の結果は返せないので、待つのをやめて抜ける
                 return ClearCorridor.Result(termination_reason="NODE_SHUTDOWN")
         with self._lock:
+            # 次の依頼に差し替えられていたら、新しい依頼の指令を止めないよう停止の指令を出さない
             if self._goal is goal:
                 self._goal = None
-            self._publish_stop(goal)
+                self._publish_stop(goal)
         return self._finish(goal)
 
     def _finish(self, goal: _ActiveGoal) -> ClearCorridor.Result:
@@ -334,7 +345,7 @@ def main(argv: list[str] | None = None) -> None:
     node = Node(NODE_NAME)
     try:
         coord_node = TeamCoordNode(node, run, CoordinationMode(args.mode))
-    except RobotNotInSceneError as error:
+    except (RobotNotInSceneError, CooperativeTeamSizeError) as error:
         logger.error("%s", error)
         node.destroy_node()
         rclpy.try_shutdown()

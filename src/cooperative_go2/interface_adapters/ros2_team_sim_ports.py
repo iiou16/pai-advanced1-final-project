@@ -198,17 +198,26 @@ class RosTeamTaskPeers:
         handle = self._wait(self._task_client.send_goal_async(goal), "通路の開通の依頼")
         if not handle.accepted:
             raise PeerNodeRejectedError("タスク管理が通路の開通の依頼を断った")
-        self._goal_handle = handle
+        with self._lock:
+            self._goal_handle = handle
 
         def on_result(future: Future) -> None:
             response = future.result()
-            # 前の試行の依頼の結果が遅れて届いても、今の依頼の結果として扱わない
-            if self._goal_handle is not handle or response.status != GoalStatus.STATUS_SUCCEEDED:
-                return
             with self._lock:
-                self._task_result = TaskResult(
-                    success=bool(response.result.success), termination_reason=response.result.termination_reason
-                )
+                # 前の試行の依頼の結果が遅れて届いても、今の依頼の結果として扱わない
+                if self._goal_handle is not handle:
+                    return
+                if response.status == GoalStatus.STATUS_SUCCEEDED:
+                    self._task_result = TaskResult(
+                        success=bool(response.result.success), termination_reason=response.result.termination_reason
+                    )
+                else:
+                    # タスク管理が依頼を中断・取り消しで終えた（協調のノードが見つからない等）。結果が届かない試行と
+                    # 区別して失敗として記録し、打ち切りの時間まで待たずに試行を終える
+                    self._task_result = TaskResult(
+                        success=False,
+                        termination_reason=f"TASK_STATUS_{response.status}:{response.result.termination_reason}",
+                    )
 
         handle.get_result_async().add_done_callback(on_result)
 
@@ -229,8 +238,9 @@ class RosTeamTaskPeers:
             PeerNodeTimeoutError: タスク管理が居るのに、時間内に応答が無い。
             PeerNodeRejectedError: 取り消しを断られた。
         """
-        handle = self._goal_handle
-        self._goal_handle = None
+        with self._lock:
+            handle = self._goal_handle
+            self._goal_handle = None
         if handle is None or self.find_task_result_or_none() is not None:
             return
         response = self._wait(handle.cancel_goal_async(), "通路の開通の依頼の取り消し")
