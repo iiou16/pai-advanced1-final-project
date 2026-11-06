@@ -197,7 +197,9 @@ def advance_coordination(
     next_phase = _next_phase(state, observation, now_s, config)
     if next_phase is state.phase:
         return state
-    task_started_s = now_s if next_phase is TeamPhase.APPROACH and state.task_started_s is None else state.task_started_s
+    task_started_s = state.task_started_s
+    if next_phase is TeamPhase.APPROACH and task_started_s is None:
+        task_started_s = now_s
     return CoordinationState(
         phase=next_phase, phase_started_s=now_s, task_started_s=task_started_s, failure_reason=None
     )
