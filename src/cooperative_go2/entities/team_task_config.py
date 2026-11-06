@@ -91,6 +91,16 @@ class TeamRuleBasedConfig:
             raise InvalidTeamTaskConfigError("push_lateral_offsets_m には 1 台以上の値が必要")
         for index, offset in enumerate(self.push_lateral_offsets_m):
             _check.finite(f"push_lateral_offsets_m[{index}]", offset)
+        readiness = self.team_readiness
+        for name, value in (
+            ("partner_stale_after_s", readiness.partner_stale_after_s),
+            ("push_start_grace_s", readiness.push_start_grace_s),
+        ):
+            # 判断の周期より短いと、相手が周期どおりに配信していても途絶えた・間に合わなかったとみなしてしまう
+            if value <= self.high_level_period_s:
+                raise InvalidTeamTaskConfigError(
+                    f"team_readiness.{name} ({value}) は high_level_period_s ({self.high_level_period_s}) より長くする"
+                )
         if self.task_manager.timeout_s <= self.coordination.timeouts.task_s:
             raise InvalidTeamTaskConfigError(
                 f"task_manager.timeout_s ({self.task_manager.timeout_s}) は coordination.timeouts.task_s "

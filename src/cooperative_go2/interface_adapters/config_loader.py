@@ -319,7 +319,25 @@ def load_team_run_settings(path: Path) -> TeamRunSettings:
             f"{path}: team.push_lateral_offsets_m の数 {num_offsets} がシーン {settings.scene_config} の"
             f"ロボットの数 {num_robots} と違う"
         )
+    _require_push_positions_fit_box(path, settings.team, scene.scene.box.size_m)
     return TeamRunSettings(settings=settings, scene=scene)
+
+
+def _require_push_positions_fit_box(path: Path, team: TeamRuleBasedConfig, box_size_m: tuple[float, ...]) -> None:
+    # 押す位置が箱の中にあると押す位置へ近づけず、押す線が箱の幅の外にあると箱の端を外して押すため
+    size_x, size_y, _ = box_size_m
+    control = team.push_control
+    if control.standoff_m <= size_x / 2:
+        raise ConfigValidationError(
+            f"{path}: team.push_control.standoff_m ({control.standoff_m}) は箱の奥行きの半分 ({size_x / 2}) より大きくする"
+        )
+    for index, offset in enumerate(team.push_lateral_offsets_m):
+        reach_m = abs(offset) + control.max_yaw_shift_m
+        if reach_m > size_y / 2:
+            raise ConfigValidationError(
+                f"{path}: team.push_lateral_offsets_m[{index}] の絶対値と max_yaw_shift_m の和 ({reach_m}) が"
+                f"箱の幅の半分 ({size_y / 2}) を超える"
+            )
 
 
 def load_push_training_settings(path: Path) -> PushTrainingSettings:
