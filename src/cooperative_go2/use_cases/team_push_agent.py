@@ -1,8 +1,8 @@
 """1 台のロボットの、規則ベースで箱を押す判断（状態機械・押す位置の判定・速度指令）。
 
 並列環境のシミュレーションで調整するときも、ROS 2 の協調のノードで動かすときも、同じこの判断を使う。
-相手の状態を使うか（協調）・使わないか（1 台、通信なしの独立制御）は CoordinationMode で切り替える。
-相手の状態を使わないときは、相手の準備を待たずに押し始め、相手が押すのをやめても押し続ける。
+相手の状態の使い方は CoordinationMode で切り替える。相手の状態を使わないとき（1 台、通信なしの独立制御）は、
+相手の準備を待たずに押し始め、相手が押すのをやめても押し続ける。
 """
 
 from dataclasses import dataclass
@@ -13,6 +13,7 @@ import torch
 from cooperative_go2.entities.coordination_state_machine import (
     CoordinationObservation,
     CoordinationState,
+    TeamPhase,
     advance_coordination,
 )
 from cooperative_go2.entities.push_success import is_in_goal_region
@@ -23,19 +24,32 @@ from cooperative_go2.entities.team_push_control import (
     compute_push_geometry,
     compute_push_predicates,
 )
-from cooperative_go2.entities.team_readiness import PartnerStatus, TeamReadinessInputs, is_team_ready_with_partner
+from cooperative_go2.entities.team_readiness import (
+    PartnerStatus,
+    TeamReadinessInputs,
+    is_partner_repositioning,
+    is_team_ready_with_partner,
+)
 from cooperative_go2.entities.team_task_config import TeamRuleBasedConfig
 
 
 class CoordinationMode(Enum):
-    """相手の状態を判断に使うか。
+    """相手の状態の使い方。
 
-    - COOPERATIVE: 2 台の協調（E5）。相手の準備を待って押し始め、相手が押すのをやめたら止まる。
+    - COOPERATIVE: 2 台の協調（E5）。相手の準備を待って押し始める。押している最中に相手が押す位置を直し始めたら、
+      止まらずに自分の押す線を箱の中央へ寄せて押し続け、相手が戻れる位置関係を作る。相手の状態が途絶えた・相手が
+      失敗したときは止まって待つ。
+    - COOPERATIVE_WAIT: 2 台の協調の、止まって待つ版。相手の準備を待って押し始め、相手が押すのをやめたら（押す位置を
+      直し始めたときも）止まって待つ。COOPERATIVE と比べ、待たずに押し続ける規則の効果を測るために残す。
     - INDEPENDENT: 1 台（E3）、または通信なしの独立制御（E4）。自分の準備だけで押し始め、相手の状態を使わない。
     """
 
     COOPERATIVE = "cooperative"
+    COOPERATIVE_WAIT = "cooperative_wait"
     INDEPENDENT = "independent"
+
+
+_COOPERATIVE_MODES = frozenset({CoordinationMode.COOPERATIVE, CoordinationMode.COOPERATIVE_WAIT})
 
 
 @dataclass(frozen=True)
@@ -132,7 +146,7 @@ class TeamPushAgent:
             box_xy_m=torch.tensor([[inputs.box.x_m, inputs.box.y_m]]),
             box_yaw_rad=torch.tensor([inputs.box.yaw_rad]),
             retreat_xy_m=torch.tensor([retreat.center_xy_m]),
-            lateral_offset_m=self._lateral_offset_m,
+            lateral_offset_m=self._lateral_offset(inputs),
         )
         geometry = compute_push_geometry(push_inputs, self._config.push_control)
         predicates = compute_push_predicates(geometry, self._state.phase, self._config.push_control)
@@ -160,10 +174,24 @@ class TeamPushAgent:
         )
 
     def _team_ready(self, inputs: TeamPushAgentInputs) -> bool:
-        if self._mode is CoordinationMode.INDEPENDENT:
+        if self._mode not in _COOPERATIVE_MODES:
             return True
-        readiness = TeamReadinessInputs(own=self._state, partner=inputs.partner, now_s=inputs.now_s)
+        readiness = TeamReadinessInputs(
+            own=self._state,
+            partner=inputs.partner,
+            now_s=inputs.now_s,
+            keep_pushing_while_partner_repositions=self._mode is CoordinationMode.COOPERATIVE,
+        )
         return is_team_ready_with_partner(readiness, self._config.team_readiness)
+
+    def _lateral_offset(self, inputs: TeamPushAgentInputs) -> float:
+        # 押している最中に相手が押す位置を直している間は、押す線を箱の中央へ寄せる。1 台で箱の片側だけを押して回さないため
+        pushing_alone = (
+            self._mode is CoordinationMode.COOPERATIVE
+            and self._state.phase is TeamPhase.PUSH
+            and is_partner_repositioning(inputs.partner, inputs.now_s, self._config.team_readiness)
+        )
+        return 0.0 if pushing_alone else self._lateral_offset_m
 
 
 class AgentNotStartedError(RuntimeError):

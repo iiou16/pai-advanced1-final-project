@@ -17,6 +17,8 @@ class InvalidTeamReadinessConfigError(InvalidConfigError):
 _check = ConfigValueChecker(InvalidTeamReadinessConfigError)
 # 押し始めの合図として、相手がこの段階にいればチームの準備ができたとみなす
 _PARTNER_PHASES_READY_TO_START = frozenset({TeamPhase.READY, TeamPhase.PUSH})
+# 押している間に相手がこの段階に戻ったら、相手は押す位置を直している（作業を続けている）とみなす
+PARTNER_REPOSITIONING_PHASES = frozenset({TeamPhase.APPROACH, TeamPhase.ALIGN, TeamPhase.READY})
 
 
 @dataclass(frozen=True)
@@ -58,21 +60,29 @@ class TeamReadinessInputs:
         own: 自分の状態機械の状態。
         partner: 最後に受け取った相手の状態。まだ一度も受け取っていなければ None。
         now_s: 現在のシミュレーション時刻 [s]。
+        keep_pushing_while_partner_repositions: 押している間に相手が押す位置を直し始めても（相手の状態が届いていて、
+            段階が PARTNER_REPOSITIONING_PHASES のどれか）、準備はできているとみなして押し続けるか。
+            False なら相手も PUSH にいることを求め、相手が押すのをやめたら止まって待つ。
     """
 
     own: CoordinationState
     partner: PartnerStatus | None
     now_s: float
+    keep_pushing_while_partner_repositions: bool
 
 
 def is_team_ready_with_partner(inputs: TeamReadinessInputs, config: TeamReadinessConfig) -> bool:
     """2 台の協調で、相手の状態から「チームの準備ができた」（CoordinationObservation.team_ready）を判定する。
 
     - 相手の状態をまだ受け取っていない、または partner_stale_after_s より古ければ、準備はできていない（途絶えた）。
-    - 自分が PUSH にいる間は、相手も PUSH にいることを求める。相手が押すのをやめたのに 1 台で押し続けると、
-      幅の広い箱の片側だけを押して箱を回すため。ただし PUSH に入ってから push_start_grace_s までは、
-      相手が同じ合図で PUSH に入る途中なので READY でもよい。
-    - それ以外（押し始める前）は、相手が READY か PUSH にいれば準備ができた。
+      押している最中でも止まって待つ。
+    - 自分が PUSH にいる間:
+      - keep_pushing_while_partner_repositions なら、相手が PUSH にいるか、押す位置を直している
+        （APPROACH・ALIGN・READY）間は準備ができているとみなす。相手が押す位置を直している間に 2 台とも止まると、
+        箱も 2 台も動かず、相手が戻れない位置関係が変わらないため。相手が失敗した（FAILED）などのときは止まる。
+      - そうでなければ、相手も PUSH にいることを求める。ただし PUSH に入ってから push_start_grace_s までは、
+        相手が同じ合図で PUSH に入る途中なので READY でもよい。
+    - それ以外（押し始める前）は、相手が READY か PUSH にいれば準備ができた（2 台が同じ合図で押し始める）。
 
     1 台や通信なしの独立制御では、この関数を使わず team_ready を常に真にする。
     """
@@ -83,6 +93,18 @@ def is_team_ready_with_partner(inputs: TeamReadinessInputs, config: TeamReadines
     if own.phase is TeamPhase.PUSH:
         if partner.phase is TeamPhase.PUSH:
             return True
+        if inputs.keep_pushing_while_partner_repositions:
+            return partner.phase in PARTNER_REPOSITIONING_PHASES
         within_grace = inputs.now_s - own.phase_started_s <= config.push_start_grace_s
         return within_grace and partner.phase is TeamPhase.READY
     return partner.phase in _PARTNER_PHASES_READY_TO_START
+
+
+def is_partner_repositioning(partner: PartnerStatus | None, now_s: float, config: TeamReadinessConfig) -> bool:
+    """相手の状態が届いていて（partner_stale_after_s 以内）、相手が押す位置を直している（APPROACH・ALIGN・READY）か。
+
+    相手の状態をまだ受け取っていない、または途絶えたなら False（直しているかどうか分からない）。
+    """
+    if partner is None or now_s - partner.stamp_s > config.partner_stale_after_s:
+        return False
+    return partner.phase in PARTNER_REPOSITIONING_PHASES

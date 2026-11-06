@@ -19,6 +19,7 @@ from cooperative_go2.entities.team_readiness import (
     PartnerStatus,
     TeamReadinessConfig,
     TeamReadinessInputs,
+    is_partner_repositioning,
     is_team_ready_with_partner,
 )
 
@@ -256,8 +257,13 @@ def test_box_in_retreat_area_before_task_is_assigned_keeps_waiting() -> None:
     assert advanced.phase is TeamPhase.INIT
 
 
-def readiness(own: CoordinationState, partner: PartnerStatus | None, now_s: float) -> bool:
-    return is_team_ready_with_partner(TeamReadinessInputs(own=own, partner=partner, now_s=now_s), READINESS)
+def readiness(
+    own: CoordinationState, partner: PartnerStatus | None, now_s: float, keep_pushing: bool = False
+) -> bool:
+    inputs = TeamReadinessInputs(
+        own=own, partner=partner, now_s=now_s, keep_pushing_while_partner_repositions=keep_pushing
+    )
+    return is_team_ready_with_partner(inputs, READINESS)
 
 
 @pytest.mark.parametrize(
@@ -298,6 +304,56 @@ def test_pushing_requires_partner_to_push_after_start_grace() -> None:
     assert readiness(own, PartnerStatus(phase=TeamPhase.READY, stamp_s=10.5), now_s=10.5) is True
     # それを過ぎて相手が READY に戻っていたら、1 台で押し続けない
     assert readiness(own, PartnerStatus(phase=TeamPhase.READY, stamp_s=10.6), now_s=10.6) is False
+
+
+@pytest.mark.parametrize(
+    ("partner_phase", "expected"),
+    [
+        (TeamPhase.APPROACH, True),
+        (TeamPhase.ALIGN, True),
+        (TeamPhase.READY, True),
+        (TeamPhase.PUSH, True),
+        (TeamPhase.FAILED, False),
+        (TeamPhase.INIT, False),
+    ],
+    ids=lambda value: value.name if isinstance(value, TeamPhase) else str(value),
+)
+def test_keep_pushing_while_partner_repositions(partner_phase: TeamPhase, expected: bool) -> None:
+    own = in_phase(TeamPhase.PUSH, phase_started_s=10.0)
+
+    ready = readiness(own, PartnerStatus(phase=partner_phase, stamp_s=12.0), now_s=12.0, keep_pushing=True)
+
+    assert ready is expected
+
+
+def test_keep_pushing_still_stops_when_partner_status_is_stale() -> None:
+    own = in_phase(TeamPhase.PUSH, phase_started_s=10.0)
+    partner = PartnerStatus(phase=TeamPhase.ALIGN, stamp_s=11.0)
+
+    assert readiness(own, partner, now_s=11.6, keep_pushing=True) is False
+
+
+def test_keep_pushing_does_not_change_start_condition() -> None:
+    # 押し始めは今までどおり、相手が READY か PUSH になるのを待つ
+    own = in_phase(TeamPhase.READY, phase_started_s=10.0)
+
+    partner = PartnerStatus(phase=TeamPhase.ALIGN, stamp_s=12.0)
+
+    assert readiness(own, partner, now_s=12.0, keep_pushing=True) is False
+
+
+@pytest.mark.parametrize(
+    ("partner", "now_s", "expected"),
+    [
+        (PartnerStatus(phase=TeamPhase.ALIGN, stamp_s=1.0), 1.1, True),
+        (PartnerStatus(phase=TeamPhase.PUSH, stamp_s=1.0), 1.1, False),
+        (PartnerStatus(phase=TeamPhase.ALIGN, stamp_s=1.0), 1.6, False),
+        (None, 1.0, False),
+    ],
+    ids=["repositioning", "pushing", "stale", "never-received"],
+)
+def test_is_partner_repositioning(partner: PartnerStatus | None, now_s: float, expected: bool) -> None:
+    assert is_partner_repositioning(partner, now_s, READINESS) is expected
 
 
 # 2 台の状態機械をつないだテスト。各ロボットは 0.1 s ごとに判断し、相手の状態は 1 回前の判断の結果を受け取る
@@ -348,7 +404,9 @@ def first_time_after(history: list[CoordinationState], start_s: float, predicate
     raise AssertionError(f"{start_s} s より後に条件を満たさなかった: 最後は {history[-1].phase.name}")
 
 
-def staged_conditions(aligned_from_s: tuple[float, float], box_in_from_s: tuple[float, float] | None) -> ConditionScript:
+def staged_conditions(
+    aligned_from_s: tuple[float, float], box_in_from_s: tuple[float, float] | None
+) -> ConditionScript:
     """依頼は最初から受け、0.5 s で押す位置に着き、ロボットごとの時刻に向きが合い、箱が退避領域に入る台本。"""
 
     def conditions(robot: int, now_s: float) -> dict[str, bool]:

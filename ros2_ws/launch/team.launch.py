@@ -117,7 +117,10 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "robots", default_value="go2_a,go2_b", description="ロボットの Namespace（シーンの設定の順、カンマ区切り）"
             ),
-            DeclareLaunchArgument("mode", description="協調のモード（cooperative: E5 / independent: E3・E4）"),
+            DeclareLaunchArgument(
+                "mode",
+                description="協調のモード（cooperative: E5 / cooperative_wait: E5 の止まって待つ版 / independent: E3・E4）",
+            ),
             DeclareLaunchArgument("seed", description="評価用の乱数シード"),
             DeclareLaunchArgument("num_trials", description="開始位置と初期姿勢を引く試行の数"),
             DeclareLaunchArgument(

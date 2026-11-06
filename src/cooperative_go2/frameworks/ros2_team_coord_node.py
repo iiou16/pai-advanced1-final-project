@@ -2,8 +2,8 @@
 
 Genesis を読み込まず、物理ステップを進められない。作業はタスク管理のノードから ClearCorridor のアクションで受ける。
 依頼の時刻（試行の始め）から high_level_period_s ごとの状態で、状態機械を進めて速度指令を決める。
-作業の状態と押す意図を /team/agent_status に配信し、協調のモード（cooperative）では相手の状態を受け取って
-準備の判定に使う。通信なしの独立制御（independent）と 1 台では相手の状態を購読しない（配信は記録のために行う）。
+作業の状態と押す意図を /team/agent_status に配信し、協調のモード（cooperative・cooperative_wait）では相手の状態を
+受け取って準備の判定に使う。通信なしの独立制御（independent）と 1 台では相手の状態を購読しない（配信は記録のために行う）。
 
 起動例（launch から起動する。Namespace でロボットを分ける）:
     go2-ros2-team-coord --config configs/team_rule_based.yaml --mode cooperative --metrics-dir outputs/<run>/nodes \\
@@ -139,7 +139,7 @@ class TeamCoordNode:
         self._status = node.create_publisher(AgentStatus, AGENT_STATUS_TOPIC, TEAM_STATUS_QOS)
         node.create_subscription(Odometry, ODOM_TOPIC, self._on_robot, SENSOR_QOS, callback_group=group)
         node.create_subscription(Odometry, OBJECT_STATE_TOPIC, self._on_box, SENSOR_QOS, callback_group=group)
-        if mode is CoordinationMode.COOPERATIVE:
+        if mode is not CoordinationMode.INDEPENDENT:
             node.create_subscription(
                 AgentStatus, AGENT_STATUS_TOPIC, self._on_agent_status, TEAM_STATUS_QOS, callback_group=group
             )
@@ -239,7 +239,7 @@ class TeamCoordNode:
         robot, box = (aligned.values[source].pose for source in SOURCES)
         now_s = ns_to_seconds(aligned.stamp_ns)
         partner = None
-        if self._mode is CoordinationMode.COOPERATIVE and self._partner is not None:
+        if self._mode is not CoordinationMode.INDEPENDENT and self._partner is not None:
             partner = self._partner.to_partner_status()
             self.partner_status_age.add(now_s - partner.stamp_s)
         roll_pitch = roll_pitch_deg_from_quat_wxyz(robot.quat_wxyz)[0]
@@ -309,7 +309,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )  # fmt: skip
     parser.add_argument(
         "--mode", choices=[mode.value for mode in CoordinationMode], required=True,
-        help="cooperative: 相手の状態を使う（E5）。independent: 使わない（E3・E4）",
+        help="cooperative: 相手の状態を使い、相手が位置を直す間は押し続ける（E5）。cooperative_wait: 相手が押すのを"
+        "やめたら止まって待つ。independent: 相手の状態を使わない（E3・E4）",
     )  # fmt: skip
     parser.add_argument("--metrics-dir", type=Path, required=True, help="終了時に計測値を書くディレクトリ")
     return parser.parse_args(argv)

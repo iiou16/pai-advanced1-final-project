@@ -110,3 +110,51 @@ def test_start_resets_state_machine(team_config: TeamRuleBasedConfig) -> None:
 
     assert agent.state.phase is TeamPhase.INIT
     assert agent.state.phase_started_s == 5.0
+
+
+def run_until_pushing(agent: TeamPushAgent) -> float:
+    """相手が READY のまま、自分が PUSH に入るまで判断を進め、そのときの時刻を返す。"""
+    now_s = run_until_ready(agent, partner=None)
+    now_s += 0.1
+    agent.decide(inputs(now_s, PartnerStatus(phase=TeamPhase.READY, stamp_s=now_s - 0.1)))
+    assert agent.state.phase is TeamPhase.PUSH
+    return now_s
+
+
+def test_cooperative_agent_keeps_pushing_on_center_line_while_partner_repositions(
+    team_config: TeamRuleBasedConfig,
+) -> None:
+    agent = TeamPushAgent(team_config, robot_index=0, mode=CoordinationMode.COOPERATIVE)
+    now_s = run_until_pushing(agent)
+
+    decision = agent.decide(inputs(now_s + 1.0, PartnerStatus(phase=TeamPhase.ALIGN, stamp_s=now_s + 0.9)))
+
+    # 押し続け、押す位置（意図）は箱の中央の線（横のずれ 0）へ寄る
+    assert decision.state.phase is TeamPhase.PUSH
+    assert decision.push_position_xy_m == pytest.approx((0.8, 0.0))
+    assert float(decision.commands[0, 0]) > 0.0
+
+
+def test_waiting_cooperative_agent_stops_while_partner_repositions(team_config: TeamRuleBasedConfig) -> None:
+    agent = TeamPushAgent(team_config, robot_index=0, mode=CoordinationMode.COOPERATIVE_WAIT)
+    now_s = run_until_pushing(agent)
+
+    decision = agent.decide(inputs(now_s + 1.0, PartnerStatus(phase=TeamPhase.ALIGN, stamp_s=now_s + 0.9)))
+
+    assert decision.state.phase is TeamPhase.READY
+    assert decision.commands[0].tolist() == [0.0, 0.0, 0.0]
+
+
+@pytest.mark.parametrize(
+    "mode", [CoordinationMode.COOPERATIVE, CoordinationMode.COOPERATIVE_WAIT], ids=lambda mode: mode.value
+)
+def test_cooperative_agents_stop_when_partner_status_is_stale(
+    team_config: TeamRuleBasedConfig, mode: CoordinationMode
+) -> None:
+    agent = TeamPushAgent(team_config, robot_index=0, mode=mode)
+    now_s = run_until_pushing(agent)
+
+    # 相手の最後の状態から 0.5 s を超えた
+    decision = agent.decide(inputs(now_s + 1.0, PartnerStatus(phase=TeamPhase.PUSH, stamp_s=now_s + 0.4)))
+
+    assert decision.state.phase is TeamPhase.READY
