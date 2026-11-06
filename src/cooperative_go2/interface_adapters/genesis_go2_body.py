@@ -18,6 +18,7 @@ from cooperative_go2.use_cases.simulation_errors import SimulationSetupError
 BASE_QPOS_SIZE = 7
 GO2_QPOS_SIZE = BASE_QPOS_SIZE + NUM_GO2_JOINTS
 BASE_POS_SLICE = slice(0, 3)
+BASE_XY_SLICE = slice(0, 2)
 BASE_QUAT_SLICE = slice(3, 7)
 GRAVITY_DIRECTION = (0.0, 0.0, -1.0)
 
@@ -110,4 +111,19 @@ class GenesisGo2Body:
         """
         qpos = self._init_qpos.expand(dof_pos.shape[0], -1).clone()
         qpos[:, self._joint_qs_idx] = dof_pos
+        self._robot.set_qpos(qpos, envs_idx=mask, zero_velocity=True, skip_forward=True)
+
+    def reset_at(self, mask: torch.Tensor, dof_pos: torch.Tensor, base_xy_m: torch.Tensor) -> None:
+        """mask が True の環境の Go2 を、胴体の水平位置だけ base_xy_m に変えて初期姿勢で置き、静止させる。
+
+        胴体の高さと向きは初期位置（robot_config）のまま。試行ごとに開始位置を散らすときに使う。
+
+        Args:
+            mask: リセットする環境のマスク (num_envs,)。
+            dof_pos: リセット後の関節角 (num_envs, 12) [rad]、GO2_JOINT_NAMES の順。mask が False の行は使わない。
+            base_xy_m: 胴体の水平位置 (num_envs, 2) [m]。mask が False の行は使わない。
+        """
+        qpos = self._init_qpos.expand(dof_pos.shape[0], -1).clone()
+        qpos[:, self._joint_qs_idx] = dof_pos
+        qpos[:, BASE_XY_SLICE] = base_xy_m
         self._robot.set_qpos(qpos, envs_idx=mask, zero_velocity=True, skip_forward=True)

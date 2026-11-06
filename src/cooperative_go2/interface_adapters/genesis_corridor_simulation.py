@@ -9,6 +9,7 @@ from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.go2_state import Go2State
 from cooperative_go2.entities.planar_frame import yaw_from_quat_wxyz
 from cooperative_go2.entities.push_observation import PlanarBodyState
+from cooperative_go2.entities.rigid_body_pose import RigidBodyPose
 from cooperative_go2.interface_adapters.config_loader import CorridorSceneSettings
 from cooperative_go2.interface_adapters.genesis_corridor_scene import (
     CorridorScene,
@@ -21,6 +22,10 @@ PLANAR_AXES = slice(0, 2)
 VERTICAL_AXIS_INDEX = 2
 # 箱を置き直すときの姿勢（回転なし）の四元数 (w, x, y, z)
 UPRIGHT_QUAT_WXYZ = (1.0, 0.0, 0.0, 0.0)
+
+
+def _read_pose(entity: RigidEntity) -> RigidBodyPose:
+    return RigidBodyPose.from_world_velocities(entity.get_pos(), entity.get_quat(), entity.get_vel(), entity.get_ang())
 
 
 class RobotCountMismatchError(ValueError):
@@ -92,6 +97,14 @@ class GenesisCorridorSimulation:
         """各 Go2 の胴体の水平面の状態（ワールド座標系）を返す。"""
         return tuple(_read_planar(robot) for robot in self._scene.robots)
 
+    def read_robot_poses(self) -> tuple[RigidBodyPose, ...]:
+        """各 Go2 の胴体の位置・姿勢・本体座標系の速度を返す。"""
+        return tuple(_read_pose(robot) for robot in self._scene.robots)
+
+    def read_box_pose(self) -> RigidBodyPose:
+        """箱の位置・姿勢・本体座標系の速度を返す。"""
+        return _read_pose(self._scene.box)
+
     def read_box_planar(self) -> PlanarBodyState:
         """箱の水平面の状態（ワールド座標系）を返す。"""
         return _read_planar(self._scene.box)
@@ -148,6 +161,23 @@ class GenesisCorridorSimulation:
         self._require_one_per_robot(len(dof_pos))
         for body, robot_dof_pos in zip(self._bodies, dof_pos, strict=True):
             body.reset(mask, robot_dof_pos)
+        self._reset_box(mask)
+
+    def reset_at(
+        self, mask: torch.Tensor, dof_pos: tuple[torch.Tensor, ...], robot_xy_m: tuple[torch.Tensor, ...]
+    ) -> None:
+        """reset() と同じだが、各 Go2 の胴体の水平位置を robot_xy_m (num_envs, 2) [m] に置く（高さと向きは初期位置のまま）。
+
+        Raises:
+            RobotCountMismatchError: dof_pos か robot_xy_m の数がロボットの数と違う。
+        """
+        self._require_one_per_robot(len(dof_pos))
+        self._require_one_per_robot(len(robot_xy_m))
+        for body, robot_dof_pos, xy in zip(self._bodies, dof_pos, robot_xy_m, strict=True):
+            body.reset_at(mask, robot_dof_pos, xy)
+        self._reset_box(mask)
+
+    def _reset_box(self, mask: torch.Tensor) -> None:
         num_envs = mask.shape[0]
         box = self._scene.box
         position = torch.tensor(self._box_initial_position, dtype=gs.tc_float, device=gs.device)
