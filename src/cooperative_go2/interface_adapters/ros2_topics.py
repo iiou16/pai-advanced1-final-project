@@ -63,7 +63,7 @@ CLOCK_QOS = QoSProfile(
 def robot_topic(robot_name: str, topic: str) -> str:
     """ロボットの名前（例: go2_a）の Namespace の下の、相対名 topic の絶対名（例: /go2_a/odom）を返す。
 
-    すべてのロボットのトピックを 1 つのノードで扱うシミュレーションノードが使う。
+    複数のロボットのトピックやアクションを 1 つのノードから扱うノード（シミュレーションノード・タスク管理のノード）が使う。
     """
     return f"/{robot_name}/{topic}"
 

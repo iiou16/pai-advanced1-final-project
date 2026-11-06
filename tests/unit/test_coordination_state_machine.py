@@ -334,7 +334,7 @@ def test_keep_pushing_still_stops_when_partner_status_is_stale() -> None:
 
 
 def test_keep_pushing_does_not_change_start_condition() -> None:
-    # 押し始めは今までどおり、相手が READY か PUSH になるのを待つ
+    # 押している間に押し続ける判定でも、押し始め（READY）の条件は変わらず、相手が READY か PUSH になるのを待つ
     own = in_phase(TeamPhase.READY, phase_started_s=10.0)
 
     partner = PartnerStatus(phase=TeamPhase.ALIGN, stamp_s=12.0)

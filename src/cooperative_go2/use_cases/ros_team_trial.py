@@ -232,7 +232,9 @@ class TeamTrialRunner:
     def run_trial(
         self, trial_index: int, dof_pos: tuple[torch.Tensor, ...], robot_xy_m: tuple[torch.Tensor, ...]
     ) -> TeamTrialRecord:
-        """各ロボットを開始位置・関節角で置いて 1 試行を走らせ、依頼の結果が届くか打ち切るまで物理を進める。
+        """各ロボットを開始位置・関節角で置いて 1 試行を走らせる。
+
+        依頼の結果が届く・max_trial_ns に達する・物理計算が発散する、のいずれかまで物理を進める。
 
         Raises:
             NoTeamJointTargetsAppliedError: いずれかのロボットの関節目標を一度も適用できなかった。

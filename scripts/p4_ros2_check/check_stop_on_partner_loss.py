@@ -3,7 +3,8 @@
 launch で協調（cooperative）の 1 試行を始め、2 台がともに PUSH を MIN_PUSHING_S 続けたら、go2_b の協調のノードを止める。
 go2_a は go2_b の作業の状態が途絶えた（partner_stale_after_s より古くなった）と判断して PUSH から READY に移り、
 停止の指令を出すはず。go2_b の最後の状態の時刻から、go2_a が PUSH を抜けた時刻までをシミュレーション時間で測り、
-途絶えの判定時間と判断の周期の和（と通信の遅れの余裕）より遅ければ終了コード 1 で終わる。
+途絶えの判定時間と判断の周期の和（と通信の遅れの余裕）より遅い、PUSH を抜けない、抜けた先が READY でない、
+抜けたあとの前進の指令が 0 にならない、のいずれかなら終了コード 1 で終わる。
 
 前提: リポジトリのルートで、/opt/ros/jazzy/setup.bash・ros2_ws/install/setup.bash・scripts/setup/env.sh を source 済み。
     uv run --frozen python scripts/p4_ros2_check/check_stop_on_partner_loss.py --run-name p4-partner-loss --seed 6101

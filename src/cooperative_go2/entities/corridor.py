@@ -142,7 +142,7 @@ def is_corridor_open(footprint: BoxFootprint, corridor: CorridorConfig) -> torch
 class PassageStage(IntEnum):
     """Go2 の通過の判定の段階。PASSED になったら、そのエピソードの間は戻らない。
 
-    - WAITING: 通路が開いた状態で入口側（通行領域の入口側の端より手前）にいたことがまだない。
+    - WAITING: 通路が開いた状態で入口側（通行領域の入口側の端以下の x）にいたことがまだない。
     - ELIGIBLE: 通路が開いた状態で入口側にいた。ここから通路（両側の壁の間）に入れば IN_CORRIDOR になる。
     - IN_CORRIDOR: 入口側から通路に入った。ここから通路の幅の中で通行領域の出口側の端を越えたら通過とする。
     - PASSED: 通過した。
