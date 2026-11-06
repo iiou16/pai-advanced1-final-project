@@ -156,6 +156,58 @@ uv run --frozen python scripts/p3_ros2_check/check_bag_clock.py outputs/ros2_bag
 - 学習環境での評価（目標の方向 ±60°、シード 2001・2002・2003、各 64 試行）と同じ初期条件で、ROS 2 経由でも成功率は 3 シードとも 100 %
   （CPU に負荷をかけた状態・かけない状態の両方）。成功までの時間は、学習環境での評価より平均 0.06 秒長い。
 
+## ROS 2 を経由した 2 台の規則ベース協調（通路の開通）
+
+壁で挟んだ通路（幅 1.4 m）をふさぐ重い箱（0.4 × 1.0 × 0.3 m、5 kg）を、Go2 が通路の出口の先の退避領域へ押し出して通路を開ける。
+規則ベースの制御で、1 台（E3）・2 台で通信なし（E4）・2 台で協調（E5）を同じ条件で比べる。学習はしない（歩行方策は上の「学習済みモデルの取得」で置く）。
+
+| ノード | 実行ファイル | 役割 |
+|---|---|---|
+| `genesis_sim` | `go2-ros2-team-sim` | Genesis のシーンを進める唯一のプロセス。各ロボットの `/go2_x/odom`・`joint_states`、`/team/object_state`・TF を配信し、各ロボットの `joint_targets` を受けて PD 制御する。試行ごとに開始位置を引き、タスク管理に通路の開通を依頼し、真値（通路の開通・箱が退避領域に入ったまま 1 s 続いたか・転倒）とタスク管理の結果を記録する |
+| `task_manager` | `go2-ros2-task-manager` | `/task/clear_corridor`（`ClearCorridor` の Action）で依頼を受け、各ロボットの協調のノードへ割り振り、進捗を返し、成功・失敗・時間切れを判定する |
+| `/go2_x/coord_policy` | `go2-ros2-team-coord` | 状態機械（INIT → APPROACH → ALIGN → READY → PUSH → VERIFY → DONE / FAILED）で判断し、`cmd_vel` と作業の状態（`/team/agent_status`）を配信する（10 Hz）。協調のモードでは相手の状態を受け、相手の準備を待って同時に押し始め、相手の状態が 0.5 s 途絶えたら・相手が押すのをやめたら押すのをやめて待つ |
+| `/go2_x/gait_policy` | `go2-ros2-gait` | 1 台の箱押しと同じ歩行方策のノード |
+
+設定は `configs/ros2_team.yaml`（2 台）・`configs/ros2_team_single.yaml`（1 台）と、それが指す `configs/team_rule_based*.yaml`・`configs/scenes/s3_*.yaml`。
+
+```bash
+# 実行するシェルで毎回 source する（ros2_ws のビルドは 1 台の手順と同じ）
+source /opt/ros/jazzy/setup.bash
+source ros2_ws/install/setup.bash
+source scripts/setup/env.sh
+
+# E5（2 台・協調）・E4（2 台・通信なし）・E3（1 台）。全試行を終えると自動で止まる
+ros2 launch ros2_ws/launch/team.launch.py mode:=cooperative seed:=6001 num_trials:=16 run_name:=e5-seed6001 device:=cpu
+ros2 launch ros2_ws/launch/team.launch.py mode:=independent seed:=6001 num_trials:=16 run_name:=e4-seed6001 device:=cpu
+ros2 launch ros2_ws/launch/team.launch.py config:=configs/ros2_team_single.yaml robots:=go2_a mode:=independent \
+    seed:=6001 num_trials:=16 run_name:=e3-seed6001 device:=cpu
+
+# 押している最中に go2_b の協調のノードを止めると、go2_a が押すのをやめて待つことを確かめる
+uv run --frozen python scripts/p4_ros2_check/check_stop_on_partner_loss.py --run-name p4-partner-loss --seed 6101
+
+# ROS 2 を通さずに、同じ判断を並列環境で動かして確かめる（制御のパラメータの調整に使った）
+uv run python scripts/p4_coordination_check/run_team_push.py --device cuda --config configs/team_rule_based.yaml \
+    --mode cooperative --output-dir outputs/p4_coordination_check/e5-check
+```
+
+- 結果は `outputs/ros2_team_eval/<run_name>/` に `trials.csv`・`summary.json`・`ros2_metrics.json`（関節目標の遅れ・実時間比）、
+  各ノードの計測値（`nodes/`。協調のノードは判断した時点の相手の状態の古さ）を保存する。保存先が既にあれば止まる。
+  成否は `summary.json` があるかで判断する。`video:=true` で全試行を 1 本の評価動画に撮る（描画のため実時間比が下がる）。
+- シミュレーションノードは `device:=cpu` で動かす。並列環境 1 つでは GPU の方が遅く、実時間比が 0.38 まで下がった（CPU では 0.82〜0.95）。
+- 開始位置を押す位置の後ろへシードで散らす（3 条件で同じシードなら同じ開始位置）。通信なしでも開始位置が同じだと 2 台が同時に着いて、
+  協調の「同時に押し始める」効果が測れないため。
+- 16 試行（シード 6001）の結果:
+
+  | 条件 | 成功 | 通路の開通 | 箱の移動量の平均 | 箱の回転の最大（平均） | 押し始めの時刻の差（平均） | 転倒 |
+  |---|---|---|---|---|---|---|
+  | E3 1 台 | 0/16 | 0/16 | 0.25 m | 4° | — | 0 |
+  | E4 2 台・通信なし | 11/16 | 14/16 | 1.92 m | 46° | 1.18 s | 2 |
+  | E5 2 台・協調 | 6/16 | 7/16 | 1.30 m | 18° | 0.006 s | 0 |
+
+  2 台なら 1 台では動かせない箱を動かせる。協調は押し始めをそろえ、箱の回転を抑え、転倒を無くしたが、成功率は通信なしより低い。
+  協調では片方が押すのをやめるともう片方も止まるので、片方が回った箱の後ろの押す位置に戻れないと 2 台とも止まって時間切れになる。
+  タスク管理の結果は 3 条件とも全試行で真値の判定と一致した。
+
 ## テスト
 
 ```bash
