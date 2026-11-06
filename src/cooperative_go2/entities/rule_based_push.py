@@ -114,6 +114,29 @@ def compute_rule_based_push_commands(
     )
 
 
+def compute_waypoint_commands(
+    robot_xy_m: torch.Tensor,
+    robot_yaw_rad: torch.Tensor,
+    target_xy_m: torch.Tensor,
+    speed_mps: float,
+    config: RuleBasedPushConfig,
+) -> torch.Tensor:
+    """目標点へ向かう速度指令 (num_envs, 3) を、箱を押すときと同じ旋回の規則で返す。
+
+    目標点の方向とのずれに比例して旋回し、向きが合うほど速く前進する。後ろ向きのときはその場で向きを変える。
+    横移動（vy）は使わない。目標点に着いたかどうかは判定しない（止めるのは呼び出し元）。
+
+    Args:
+        robot_xy_m: ロボットの胴体の位置 (num_envs, 2)、ワールド座標系 [m]。
+        robot_yaw_rad: ロボットのヨー角 (num_envs,) [rad]。
+        target_xy_m: 目標点 (num_envs, 2)、ワールド座標系 [m]。
+        speed_mps: 向きが合っているときの前進速度 [m/s]。歩行方策が学習した指令の範囲に収める。
+        config: 旋回のゲインと上限（yaw_gain_per_s・max_yaw_rate_radps）を使う。
+    """
+    heading_error = _heading_error_rad(robot_xy_m, robot_yaw_rad, target_xy_m)
+    return _steer_toward(heading_error, torch.full_like(heading_error, speed_mps), config)
+
+
 def _heading_error_rad(
     robot_xy_m: torch.Tensor, robot_yaw_rad: torch.Tensor, target_xy_m: torch.Tensor
 ) -> torch.Tensor:

@@ -156,6 +156,82 @@ uv run --frozen python scripts/p3_ros2_check/check_bag_clock.py outputs/ros2_bag
 - 学習環境での評価（目標の方向 ±60°、シード 2001・2002・2003、各 64 試行）と同じ初期条件で、ROS 2 経由でも成功率は 3 シードとも 100 %
   （CPU に負荷をかけた状態・かけない状態の両方）。成功までの時間は、学習環境での評価より平均 0.06 秒長い。
 
+## ROS 2 を経由した 2 台の規則ベース協調（通路の開通）
+
+壁で挟んだ通路（幅 1.4 m）をふさぐ重い箱（0.4 × 1.0 × 0.3 m、5 kg）を、Go2 が通路の出口の先の退避領域へ押し出して通路を開ける。
+規則ベースの制御で、1 台（E3）・2 台で通信なし（E4）・2 台で協調（E5）を同じ条件で比べる。学習はしない（歩行方策は上の「学習済みモデルの取得」で置く）。
+
+| ノード | 実行ファイル | 役割 |
+|---|---|---|
+| `genesis_sim` | `go2-ros2-team-sim` | Genesis のシーンを進める唯一のプロセス。各ロボットの `/go2_x/odom`・`joint_states`、`/team/object_state`・TF を配信し、各ロボットの `joint_targets` を受けて PD 制御する。試行ごとに開始位置を引き、タスク管理に通路の開通を依頼し、真値（通路の開通・箱が退避領域に入ったまま 1 s 続いたか・転倒）とタスク管理の結果を記録する |
+| `task_manager` | `go2-ros2-task-manager` | `/task/clear_corridor`（`ClearCorridor` の Action）で依頼を受け、各ロボットの協調のノードへ割り振り、進捗を返し、成功・失敗・時間切れを判定する |
+| `/go2_x/coord_policy` | `go2-ros2-team-coord` | 状態機械（INIT → APPROACH → ALIGN → READY → PUSH → VERIFY → DONE / FAILED）で判断し、`cmd_vel` と作業の状態（`/team/agent_status`）を配信する（10 Hz）。協調のモードでは相手の状態を受け、相手の準備を待って同時に押し始める。相手の状態が 0.5 s 途絶えたら・相手が失敗したら押すのをやめて待つ |
+| `/go2_x/gait_policy` | `go2-ros2-gait` | 1 台の箱押しと同じ歩行方策のノード |
+
+設定は `configs/ros2_team.yaml`（2 台）・`configs/ros2_team_single.yaml`（1 台）と、それが指す `configs/team_rule_based*.yaml`・`configs/scenes/s3_*.yaml`。
+
+E4 と E5 は、ロボットごとの制御を同じにし、ロボット同士の通信（`/team/agent_status`）を使うかどうかだけを変える（協調のノードの `mode`）。
+
+| | E4（`mode:=independent`） | E5（`mode:=cooperative`） | E5 の改良前（`mode:=cooperative_wait`） |
+|---|---|---|---|
+| 押し始め | 自分の準備ができたらすぐ押し始める | 相手も READY か PUSH になるのを待ってから押し始める | E5 と同じ |
+| 相手が押す位置を直し始めたとき（向きが外れた） | 自分の線のまま 1 台で押し続ける | 押す線を箱の中央へ寄せて押し続ける | 押すのをやめて待つ |
+| 相手が転倒した・相手の状態が 0.5 s 届かない | 1 台で押し続ける | 押すのをやめて待つ | 押すのをやめて待つ |
+
+押す側（`go2_a` が左、`go2_b` が右）は設定で前もって決め、通信では決めない。箱の回転を戻す規則（2 台の押す線を遅れている側へずらす）は、
+箱の姿勢（`/team/object_state`、シミュレーションの真値でロボット同士の通信ではない）だけで判断できるので E4 にも残す。
+外すと、通信の効果と回転を戻す規則の効果が 1 つの比較に混ざるため。
+
+```bash
+# 実行するシェルで毎回 source する（ros2_ws のビルドは 1 台の手順と同じ）
+source /opt/ros/jazzy/setup.bash
+source ros2_ws/install/setup.bash
+source scripts/setup/env.sh
+
+# E5（2 台・協調）・E4（2 台・通信なし）・E3（1 台）。全試行を終えると自動で止まる。E5 の改良前は mode:=cooperative_wait
+ros2 launch ros2_ws/launch/team.launch.py mode:=cooperative seed:=6001 num_trials:=16 run_name:=e5-seed6001 device:=cpu
+ros2 launch ros2_ws/launch/team.launch.py mode:=independent seed:=6001 num_trials:=16 run_name:=e4-seed6001 device:=cpu
+ros2 launch ros2_ws/launch/team.launch.py config:=configs/ros2_team_single.yaml robots:=go2_a mode:=independent \
+    seed:=6001 num_trials:=16 run_name:=e3-seed6001 device:=cpu
+
+# 評価と同じ開始位置の一部の試行だけを動画付きで流す（trial_indices に試行の番号）
+ros2 launch ros2_ws/launch/team.launch.py mode:=cooperative seed:=6001 num_trials:=16 trial_indices:=8,1 \
+    run_name:=e5-video-seed6001-trials8-1 device:=cpu video:=true
+
+# 押している最中に go2_b の協調のノードを止めると、go2_a が押すのをやめて待つことを確かめる
+uv run --frozen python scripts/p4_ros2_check/check_stop_on_partner_loss.py --run-name p4-partner-loss --seed 6101
+
+# ROS 2 を通さずに、同じ判断を並列環境で動かして確かめる（制御のパラメータの調整に使った）
+uv run python scripts/p4_coordination_check/run_team_push.py --device cuda --config configs/team_rule_based.yaml \
+    --mode cooperative --output-dir outputs/p4_coordination_check/e5-check
+```
+
+- 結果は `outputs/ros2_team_eval/<run_name>/` に `trials.csv`・`summary.json`・`ros2_metrics.json`（関節目標の遅れ・実時間比）、
+  各ノードの計測値（`nodes/`。協調のノードは判断した時点の相手の状態の古さ）を保存する。保存先が既にあれば止まる。
+  成否は `summary.json` があるかで判断する。`video:=true` で全試行を 1 本の評価動画に撮る（描画のため実時間比が下がる）。
+- シミュレーションノードは `device:=cpu` で動かす。並列環境 1 つでは GPU の方が遅く、実時間比が 0.38 まで下がった（CPU では 0.82〜0.95）。
+- 開始位置を押す位置の後ろへシードで散らす（3 条件で同じシードなら同じ開始位置）。通信なしでも開始位置が同じだと 2 台が同時に着いて、
+  協調の「同時に押し始める」効果が測れないため。
+- シード 6001 の 16 試行の結果（E4・E5 は同じ 16 試行を 2 回流した合計の 32 試行。E3 は 16 試行とも箱がほとんど動かなかったので 1 回）:
+
+  | 条件 | 成功 | 通路の開通 | 箱の移動量の平均 | 箱の回転の最大（平均／全体） | 押し始めの時刻の差（平均） | 転倒 |
+  |---|---|---|---|---|---|---|
+  | E3 1 台 | 0/16 | 0/16 | 0.25 m | 4° / 4° | — | 0 |
+  | E4 2 台・通信なし | 21/32 | 26/32 | 1.87 m | 46° / 87° | 1.18 s | 3 |
+  | E5 2 台・協調 | 19/32 | 20/32 | 1.64 m | 17° / 31° | 0.01 s | 0 |
+  | E5 の改良前（止まって待つ） | 11/32 | 14/32 | 1.32 m | 20° / 65° | 0.01 s | 0 |
+
+  2 台なら 1 台では動かせない箱を動かせる。協調は通信なしとほぼ同じ成功率で、押し始めをそろえ、箱の回転を抑え、転倒を無くし、
+  通路を早く開けた（開通までの平均 E5 18.3 s・E4 24.3 s）。
+  改良前の協調では、片方が押すのをやめるともう片方も止まるので、片方が回った箱の後ろの押す位置に戻れないと 2 台とも止まって時間切れになった。
+  並列環境の 16 試行で、押している途中で PUSH を抜けた場面を数えると、抜けている間に相手が押していた割合は改良前の E5 1 %・E4 51 %、
+  その間の箱の移動は平均 +0.01 m・+0.12 m だった。通信なしでは残った 1 台が押し続けて箱と 2 台の位置関係が変わり、
+  外れた方が押す位置に戻りやすくなる。そこで E5 を、相手が押す位置を直している間は押す線を箱の中央へ寄せて押し続ける規則に改良し、
+  成功は 11 から 19 に増えた（並列環境の 32 試行、シード 5001 では改良前 8・改良後 20・通信なし 18）。
+  残る失敗の多くは、片方が回った箱の後ろの押す位置に戻れない時間切れ。タスク管理の結果は全条件・全試行で真値の判定と一致した。
+- 物理は方策の応答を待たずに進めるので、同じ開始位置でも実行ごとに結果が変わる（2 回の実行で成功の数はほぼ同じだが、
+  E5 で 2 回とも成功した試行は 1 つだけ）。条件の比較は試行ごとではなく、試行の割合で行う。
+
 ## テスト
 
 ```bash

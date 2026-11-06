@@ -8,6 +8,7 @@ from cooperative_go2.entities.rule_based_push import (
     RuleBasedPushInputs,
     RuleBasedPushPhase,
     compute_rule_based_push_commands,
+    compute_waypoint_commands,
 )
 
 CONFIG = RuleBasedPushConfig(
@@ -160,3 +161,30 @@ def test_config_rejects_non_positive_speed() -> None:
             side_offset_m=0.7,
             align_min_cos=0.95,
         )
+
+
+def _waypoint(robot_yaw: float, target_xy: tuple[float, float]) -> torch.Tensor:
+    commands = compute_waypoint_commands(
+        torch.tensor([[0.0, 0.0]]), torch.tensor([robot_yaw]), torch.tensor([target_xy]), 0.5, CONFIG
+    )
+    return commands[0]
+
+
+def test_waypoint_commands_go_straight_when_facing_target() -> None:
+    commands = _waypoint(0.0, (2.0, 0.0))
+
+    assert commands.tolist() == pytest.approx([0.5, 0.0, 0.0])
+
+
+def test_waypoint_commands_turn_in_place_when_target_is_behind() -> None:
+    commands = _waypoint(0.0, (-2.0, 0.01))
+
+    # 後ろ向き（ずれ ≈ π）では前進せず、旋回の上限で向きを変える
+    assert commands.tolist() == pytest.approx([0.0, 0.0, CONFIG.max_yaw_rate_radps])
+
+
+def test_waypoint_commands_slow_down_in_proportion_to_heading_error() -> None:
+    commands = _waypoint(0.0, (1.0, 1.0))
+
+    # ずれ 45°: 前進は 0.5 × cos 45°、旋回は 2.0 × π/4 ≈ 1.57 を上限 1.0 で切る
+    assert commands.tolist() == pytest.approx([0.5 * math.cos(math.pi / 4), 0.0, 1.0])

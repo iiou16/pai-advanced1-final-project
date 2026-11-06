@@ -5,7 +5,11 @@ import math
 import pytest
 import torch
 
-from cooperative_go2.entities.quaternion import rotate_by_inverse_quat_wxyz, rotate_by_quat_wxyz
+from cooperative_go2.entities.quaternion import (
+    roll_pitch_deg_from_quat_wxyz,
+    rotate_by_inverse_quat_wxyz,
+    rotate_by_quat_wxyz,
+)
 from cooperative_go2.entities.rigid_body_pose import RigidBodyPose, proprioception_from_pose
 
 
@@ -101,3 +105,20 @@ def test_proprioception_uses_body_angular_velocity_and_joint_state() -> None:
     assert proprioception.projected_gravity == pytest.approx(torch.tensor([[0.0, 0.0, -1.0]]))
     assert torch.equal(proprioception.dof_pos, dof_pos)
     assert torch.equal(proprioception.dof_vel, dof_vel)
+
+
+def test_roll_pitch_from_quaternion() -> None:
+    half = math.radians(20.0) / 2
+    # x 軸まわりに 20°（ロール）、y 軸まわりに 20°（ピッチ）、z 軸まわりに 90°（ヨーは含めない）
+    quats = torch.tensor(
+        [
+            [math.cos(half), math.sin(half), 0.0, 0.0],
+            [math.cos(half), 0.0, math.sin(half), 0.0],
+            [math.cos(math.pi / 4), 0.0, 0.0, math.sin(math.pi / 4)],
+        ]
+    )
+
+    angles = roll_pitch_deg_from_quat_wxyz(quats)
+
+    assert angles.tolist() == [pytest.approx([20.0, 0.0], abs=1e-4), pytest.approx([0.0, 20.0], abs=1e-4),
+                               pytest.approx([0.0, 0.0], abs=1e-4)]  # fmt: skip

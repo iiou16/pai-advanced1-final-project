@@ -1,0 +1,67 @@
+# 2 台の規則ベース協調（E4・E5）で、箱を通路の出口の先の退避領域へ押し出す作業の設定。
+# E3（1 台）は configs/team_rule_based_single.yaml を使う。違いはシーンと押す側の割り当てだけにそろえる。
+# すべてのキーが必須。読み込み時に過不足・型・値の範囲と、押す側の割り当ての数がシーンのロボットの数と同じことを検証する。
+
+scene_config: configs/scenes/s3_team.yaml
+
+# 固定して使う歩行方策（1 台の箱押しと同じ）
+gait_policy:
+  run_dir: outputs/gait/gait-command-tracking
+  checkpoint: 1500
+
+team:
+  # 状態機械を進め、速度指令を決める周期。1 台の箱押しの高レベル方策と同じ 10 Hz
+  high_level_period_s: 0.1
+  # 歩行方策の学習時の転倒の判定（ロール・ピッチ 10°）と同じ
+  fall_tilt_deg: 10.0
+  # シーンの robots と同じ順（go2_a は左、go2_b は右）。箱の幅 1.0 m の中で、2 台の胴体（幅 約 0.31 m）が離れて並ぶ位置
+  push_lateral_offsets_m: [0.25, -0.25]
+
+  push_control:
+    approach_speed_mps: 0.5
+    # 重い箱を押す指令。高レベル方策の指令の上限で、1 台では通路を開けられず 2 台なら大きく動かせる
+    push_speed_mps: 0.6
+    yaw_gain_per_s: 2.0
+    max_yaw_rate_radps: 1.0
+    # 箱の奥行きの半分（0.2 m）＋ Go2 の胴体の原点から前端まで（約 0.35 m）＋ すき間 0.05 m
+    standoff_m: 0.6
+    position_tolerance_m: 0.15
+    approach_slowdown_m: 0.5
+    heading_tolerance_rad: 0.15
+    # 押している間は、回った箱の面に押されて線から外れやすい。外れて PUSH を抜けると、通路の中では回った箱の後ろの
+    # 押す位置へ戻りにくいため、押し始める前より緩くする（並列環境での確認で、0.25 m より成功が多かった）
+    push_lateral_tolerance_m: 0.4
+    push_heading_tolerance_rad: 0.8
+    lookahead_m: 0.5
+    # 押す速さを落として回転を戻す規則は使わない。5 kg の箱は 2 台が全力で押してやっと動くので、
+    # 前に出た側が速さを落とすと箱が止まった（並列環境での確認で、使うと成功が減った）
+    yaw_balance_gain_per_rad: 0.0
+    # 2 台の押す線をそろって遅れている側へずらし、押す力の中心を移して回転を戻す（2 台とも全力のまま押せる）
+    yaw_shift_gain_m_per_rad: 1.0
+    # 外側のロボットが箱の幅（±0.5 m）から大きく外れない範囲
+    max_yaw_shift_m: 0.2
+
+  coordination:
+    timeouts:
+      task_s: 60.0
+      approach_s: 20.0
+      align_s: 10.0
+      ready_s: 20.0
+      push_s: 40.0
+    # 押し終えた直後に箱が滑って退避領域から出ていく場合を成功に数えない
+    verify_hold_s: 1.0
+
+  team_readiness:
+    partner_stale_after_s: 0.5
+    # 相手が同じ合図で PUSH に入るまでの通信の遅れを待つ時間
+    push_start_grace_s: 0.5
+
+  reset:
+    # 押す位置に着く時刻をロボットごとにずらし、通信が無い条件（E4）と協調（E5）の差が出るようにする
+    start_back_m: {low: 0.0, high: 0.8}
+    # 2 台の胴体の間（約 0.19 m）を残してぶつからない幅
+    start_lateral_jitter_m: 0.05
+
+  task_manager:
+    # ロボットの作業全体の時間切れ（60 s）と、成功を確かめる時間（1 s）より長くし、ロボットが自分で結果を返せないときの歯止めにする
+    timeout_s: 65.0

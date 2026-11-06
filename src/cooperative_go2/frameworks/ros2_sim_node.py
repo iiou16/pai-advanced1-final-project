@@ -15,7 +15,6 @@ ros2_metrics.json（適用した関節目標の遅れ・往復の遅延・実時
 import argparse
 import logging
 import sys
-import threading
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -24,7 +23,6 @@ from pathlib import Path
 import rclpy
 import torch
 from genesis.utils.geom import default_friction
-from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.utilities import remove_ros_args
 
@@ -43,6 +41,11 @@ from cooperative_go2.frameworks.evaluate_push import (
     VIDEO_LOOKAT_OFFSET_M,
 )
 from cooperative_go2.frameworks.genesis_runtime import make_seeded_generator
+from cooperative_go2.frameworks.ros2_executor_thread import (
+    ExecutorThread,
+    ExecutorThreadFailedError,
+    HealthCheckedPacer,
+)
 from cooperative_go2.frameworks.git_revision import GitCommitUnavailableError, current_commit_sha
 from cooperative_go2.interface_adapters.config_loader import (
     ConfigValidationError,
@@ -139,49 +142,6 @@ def _load_inputs(config_path: Path) -> _Inputs:
     return _Inputs(settings, push, scene, gait, current_commit_sha())
 
 
-class ExecutorThreadFailedError(RuntimeError):
-    """ROS 2 の受信を処理するスレッドが例外で止まったことを表す。関節目標や応答が届かなくなる。"""
-
-
-class _ExecutorThread:
-    """ROS 2 の受信の処理を別のスレッドで回し、そのスレッドが例外で止まったことを試行のスレッドに伝える。"""
-
-    def __init__(self, node: Node) -> None:
-        self.executor = MultiThreadedExecutor()
-        self.executor.add_node(node)
-        self._error: Exception | None = None
-        threading.Thread(target=self._spin, daemon=True).start()
-
-    def _spin(self) -> None:
-        try:
-            self.executor.spin()
-        except Exception as error:
-            # このスレッドの最上位。例外を握りつぶさず保持し、試行のスレッドが raise_if_failed() で送出する
-            self._error = error
-
-    def find_error_or_none(self) -> Exception | None:
-        """受信のスレッドを止めた例外を返す。止まっていなければ None。"""
-        return self._error
-
-    def raise_if_failed(self) -> None:
-        """受信のスレッドが例外で止まっていれば ExecutorThreadFailedError を送出する。"""
-        if self._error is not None:
-            raise ExecutorThreadFailedError(f"ROS 2 の受信のスレッドが止まった: {self._error!r}") from self._error
-
-
-class _HealthCheckedPacer:
-    """物理ステップの前に、ROS 2 の受信のスレッドが動いていることを確かめてから実時間の間隔を整える。"""
-
-    def __init__(self, pacer: RealTimePacer, executor_thread: _ExecutorThread) -> None:
-        self._pacer = pacer
-        self._executor_thread = executor_thread
-
-    def wait_for_next_step(self) -> None:
-        """受信のスレッドが止まっていれば ExecutorThreadFailedError を送出し、そうでなければ次のステップまで待つ。"""
-        self._executor_thread.raise_if_failed()
-        self._pacer.wait_for_next_step()
-
-
 @dataclass(frozen=True)
 class _TrialsOutcome:
     records: list[PushTrialRecord]
@@ -189,7 +149,7 @@ class _TrialsOutcome:
 
 
 def _run_trials(
-    args: argparse.Namespace, inputs: _Inputs, node: Node, executor_thread: _ExecutorThread, output_dir: Path
+    args: argparse.Namespace, inputs: _Inputs, node: Node, executor_thread: ExecutorThread, output_dir: Path
 ) -> _TrialsOutcome:
     task = inputs.push.task
     gait_env = inputs.gait.env
@@ -214,7 +174,7 @@ def _run_trials(
         world=world,
         publisher=RosWorldStatePublisher(node, latency_probe),
         peers=peers,
-        pacer=_HealthCheckedPacer(RealTimePacer(gait_env.control_dt_s, runtime.max_real_time_factor), executor_thread),
+        pacer=HealthCheckedPacer(RealTimePacer(gait_env.control_dt_s, runtime.max_real_time_factor), executor_thread),
         wall_clock=time.perf_counter,
     )
     trial_timing = PushTrialTiming(control_dt_ns, task.gait_steps_per_high_level_step(gait_env.control_dt_s))
@@ -315,7 +275,7 @@ def main(argv: list[str] | None = None) -> None:
     DEVICES[args.device](args.seed)
     rclpy.init(args=raw_argv)
     node = Node(NODE_NAME)
-    executor_thread = _ExecutorThread(node)
+    executor_thread = ExecutorThread(node)
     left = f"（保存先 {output_dir} は途中のまま残っている。削除してから再実行する）"
     try:
         outcome = _run_trials(args, inputs, node, executor_thread, output_dir)

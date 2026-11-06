@@ -13,6 +13,7 @@ import yaml
 
 from cooperative_go2.entities.command_expiry import CommandExpiryConfig
 from cooperative_go2.entities.config_validation import ConfigValueChecker, InvalidConfigError
+from cooperative_go2.entities.corridor_scene_config import CorridorSceneConfig
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_evaluation import GaitEvaluationSuite, InvalidEvaluationScenarioError
 from cooperative_go2.entities.push_config import RuleBasedPushConfig
@@ -22,12 +23,15 @@ from cooperative_go2.entities.push_task_config import (
     PushTrainingRunConfig,
     require_rule_based_within_commands,
 )
+from cooperative_go2.entities.team_task_config import TeamRuleBasedConfig
 from cooperative_go2.interface_adapters.genesis_scene_config import GenesisSceneConfig, require_genesis_friction
 from cooperative_go2.interface_adapters.rsl_rl_config import RslRlPpoConfig
 
 _ROOT_KEY_PATH = "<root>"
 # 歩行の設定ファイルのうち、RSL-RL 固有の設定を書く節の名前
 RSL_RL_SECTION = "rsl_rl"
+# シーンの設定ファイルのうち、Genesis 固有の設定を書く節の名前
+GENESIS_SECTION = "genesis"
 
 
 class ConfigValidationError(ValueError):
@@ -58,6 +62,18 @@ class PushSceneSettings:
 
 
 @dataclass(frozen=True)
+class CorridorSceneSettings:
+    """通路のシーンの設定ファイル 1 つ分。scene は内側の層に渡し、genesis はシーンの構築にだけ使う。"""
+
+    scene: CorridorSceneConfig
+    genesis: GenesisSceneConfig
+
+    def __post_init__(self) -> None:
+        # 箱の摩擦はドメインとしては正の値なら意味を持つが、Genesis が受け付ける範囲は狭いため、ここで早めに弾く
+        require_genesis_friction("box.friction", self.scene.box.friction)
+
+
+@dataclass(frozen=True)
 class GaitPolicySource:
     """固定して使う歩行方策の出所。
 
@@ -69,6 +85,29 @@ class GaitPolicySource:
 
     run_dir: str
     checkpoint: int
+
+
+@dataclass(frozen=True)
+class TeamRuleBasedSettings:
+    """規則ベースで箱を押す作業の設定ファイル（configs/team_rule_based.yaml 形式）1 つ分。
+
+    Attributes:
+        scene_config: 通路のシーンの設定ファイル（configs/scenes/*.yaml）。相対パスは現在の作業ディレクトリ起点。
+        gait_policy: 固定して使う歩行方策。
+        team: 押す側の割り当て・制御・状態機械・開始位置の設定。
+    """
+
+    scene_config: str
+    gait_policy: GaitPolicySource
+    team: TeamRuleBasedConfig
+
+
+@dataclass(frozen=True)
+class TeamRunSettings:
+    """規則ベースで箱を押す作業の設定と、それが指すシーンの設定。ロボットの数がそろっていることを確かめてある。"""
+
+    settings: TeamRuleBasedSettings
+    scene: CorridorSceneSettings
 
 
 @dataclass(frozen=True)
@@ -157,6 +196,21 @@ class Ros2PushSettings:
     runtime: Ros2RuntimeConfig
 
 
+@dataclass(frozen=True)
+class Ros2TeamSettings:
+    """ROS 2 を経由した通路の開通（1 台・2 台）の設定ファイル（configs/ros2_team.yaml 形式）1 つ分。
+
+    Attributes:
+        team_config: 作業の設定ファイル（configs/team_rule_based*.yaml 形式）。相対パスは現在の作業ディレクトリ起点。
+        command_expiry: 速度指令と関節目標の有効期限。
+        runtime: 実時間の条件。
+    """
+
+    team_config: str
+    command_expiry: CommandExpiryConfig
+    runtime: Ros2RuntimeConfig
+
+
 def load_ros2_push_settings(path: Path) -> Ros2PushSettings:
     """ROS 2 を経由した 1 台の箱押しの設定ファイルを読み込み、検証済みの設定を返す。
 
@@ -206,6 +260,84 @@ def load_push_scene_settings(path: Path) -> PushSceneSettings:
         ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
     """
     return parse_push_scene_settings(_read_yaml(path))
+
+
+def load_corridor_scene_settings(path: Path) -> CorridorSceneSettings:
+    """通路のシーンの設定ファイル（configs/scenes/s2_corridor.yaml 形式）を読み込み、検証済みの設定を返す。
+
+    genesis 節だけを Genesis の設定として分け、残りの節を通路のシーンの配置として読む。
+
+    Args:
+        path: 設定ファイル。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
+    """
+    mapping = _require_type(_read_yaml(path), dict, _ROOT_KEY_PATH)
+    if GENESIS_SECTION not in mapping:
+        raise ConfigValidationError(f"{_ROOT_KEY_PATH}: キー {GENESIS_SECTION!r} が無い")
+    scene_data = {key: value for key, value in mapping.items() if key != GENESIS_SECTION}
+    genesis = _build_dataclass(GenesisSceneConfig, mapping[GENESIS_SECTION], GENESIS_SECTION)
+    scene = _build_dataclass(CorridorSceneConfig, scene_data, _ROOT_KEY_PATH)
+    try:
+        return CorridorSceneSettings(scene=scene, genesis=genesis)
+    except InvalidConfigError as error:
+        raise ConfigValidationError(f"{path}: {error}") from error
+
+
+def load_ros2_team_settings(path: Path) -> Ros2TeamSettings:
+    """ROS 2 を経由した通路の開通の設定ファイルを読み込み、検証済みの設定を返す。
+
+    Args:
+        path: 設定ファイル（configs/ros2_team.yaml 形式）。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
+    """
+    return _build_dataclass(Ros2TeamSettings, _read_yaml(path), _ROOT_KEY_PATH)
+
+
+def load_team_run_settings(path: Path) -> TeamRunSettings:
+    """規則ベースで箱を押す作業の設定ファイルと、それが指すシーンの設定ファイルを読み込み、検証済みの設定を返す。
+
+    Args:
+        path: 作業の設定ファイル（configs/team_rule_based.yaml 形式）。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: 作業またはシーンの設定ファイルが無い。
+        ConfigValidationError: YAML として読めない、キーの過不足・型・値が不正、または押す側の割り当ての数が
+            シーンのロボットの数と違う。
+    """
+    settings = _build_dataclass(TeamRuleBasedSettings, _read_yaml(path), _ROOT_KEY_PATH)
+    scene = load_corridor_scene_settings(Path(settings.scene_config))
+    num_offsets = len(settings.team.push_lateral_offsets_m)
+    num_robots = len(scene.scene.robots)
+    if num_offsets != num_robots:
+        raise ConfigValidationError(
+            f"{path}: team.push_lateral_offsets_m の数 {num_offsets} がシーン {settings.scene_config} の"
+            f"ロボットの数 {num_robots} と違う"
+        )
+    _require_push_positions_fit_box(path, settings.team, scene.scene.box.size_m)
+    return TeamRunSettings(settings=settings, scene=scene)
+
+
+def _require_push_positions_fit_box(path: Path, team: TeamRuleBasedConfig, box_size_m: tuple[float, ...]) -> None:
+    # 押す位置が箱の中にあると押す位置へ近づけず、押す線が箱の幅の外にあると箱の端を外して押すため
+    size_x, size_y, _ = box_size_m
+    control = team.push_control
+    if control.standoff_m <= size_x / 2:
+        raise ConfigValidationError(
+            f"{path}: team.push_control.standoff_m ({control.standoff_m}) は箱の奥行きの半分 ({size_x / 2}) より大きくする"
+        )
+    for index, offset in enumerate(team.push_lateral_offsets_m):
+        reach_m = abs(offset) + control.max_yaw_shift_m
+        if reach_m > size_y / 2:
+            raise ConfigValidationError(
+                f"{path}: team.push_lateral_offsets_m[{index}] の絶対値と max_yaw_shift_m の和 ({reach_m}) が"
+                f"箱の幅の半分 ({size_y / 2}) を超える"
+            )
 
 
 def load_push_training_settings(path: Path) -> PushTrainingSettings:
