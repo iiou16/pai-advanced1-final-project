@@ -13,6 +13,9 @@
     ros2 launch ros2_ws/launch/team.launch.py mode:=cooperative seed:=6001 num_trials:=16 run_name:=e5-seed6001
 例（E4: 2 台・通信なし）:
     ros2 launch ros2_ws/launch/team.launch.py mode:=independent seed:=6001 num_trials:=16 run_name:=e4-seed6001
+例（評価と同じ開始位置の試行 8・1 だけを動画付きで）:
+    ros2 launch ros2_ws/launch/team.launch.py mode:=cooperative seed:=6001 num_trials:=16 trial_indices:=8,1 \\
+        run_name:=e5-video-seed6001-trials8-1 video:=true
 例（E3: 1 台）:
     ros2 launch ros2_ws/launch/team.launch.py config:=configs/ros2_team_single.yaml robots:=go2_a \\
         mode:=independent seed:=6001 num_trials:=16 run_name:=e3-seed6001
@@ -97,6 +100,7 @@ def generate_launch_description() -> LaunchDescription:
             "--mode", LaunchConfiguration("mode"),
             "--seed", LaunchConfiguration("seed"),
             "--num-trials", LaunchConfiguration("num_trials"),
+            "--trial-indices", LaunchConfiguration("trial_indices"),
             "--device", LaunchConfiguration("device"),
             "--run-name", LaunchConfiguration("run_name"),
             "--video", LaunchConfiguration("video"),
@@ -115,7 +119,11 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument("mode", description="協調のモード（cooperative: E5 / independent: E3・E4）"),
             DeclareLaunchArgument("seed", description="評価用の乱数シード"),
-            DeclareLaunchArgument("num_trials", description="続けて行う試行の数"),
+            DeclareLaunchArgument("num_trials", description="開始位置と初期姿勢を引く試行の数"),
+            DeclareLaunchArgument(
+                "trial_indices", default_value="all",
+                description="実際に行う試行の番号（カンマ区切り、all なら全試行）。評価動画を一部の試行だけ撮るときに使う",
+            ),  # fmt: skip
             DeclareLaunchArgument("run_name", description=f"{EVAL_ROOT}/<run_name> に保存する"),
             DeclareLaunchArgument("device", default_value="cuda", description="Genesis を動かすデバイス（cpu / cuda）"),
             DeclareLaunchArgument("video", default_value="false", description="評価動画を撮るか（true / false）"),

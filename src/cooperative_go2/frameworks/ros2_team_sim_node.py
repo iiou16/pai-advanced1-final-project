@@ -85,6 +85,8 @@ VIDEO_CAMERA = FixedCameraSpec(
 )
 # タスク管理の時間切れのあと、結果が届くのを待つシミュレーション時間 [s]。結果が届かないときの最後の歯止め
 TASK_RESULT_GRACE_S = 5.0
+# --trial-indices で全試行を表す値
+ALL_TRIALS = "all"
 # launch の引数をそのまま渡せるよう、真偽を文字列で受け取る
 VIDEO_ON = "true"
 VIDEO_OFF = "false"
@@ -119,13 +121,25 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="協調のノードのモード（記録の条件として残す。協調のノードにも同じ値を渡す）",
     )  # fmt: skip
     parser.add_argument("--seed", type=int, required=True, help="評価用の乱数シード（開始位置と初期姿勢）")
-    parser.add_argument("--num-trials", type=int, required=True, help="続けて行う試行の数")
+    parser.add_argument("--num-trials", type=int, required=True, help="開始位置と初期姿勢を引く試行の数")
+    parser.add_argument(
+        "--trial-indices", required=True,
+        help=f"実際に行う試行の番号（カンマ区切り）。{ALL_TRIALS} なら全試行。開始位置は --num-trials 試行分を引いてから選ぶので、"
+        "同じシード・試行の数の評価の同じ番号の試行と同じ初期条件になる（評価動画を一部の試行だけ撮るときに使う）",
+    )  # fmt: skip
     parser.add_argument("--device", choices=sorted(DEVICES), required=True, help="Genesis を動かすデバイス")
     parser.add_argument("--run-name", required=True, help=f"実行の名前。{OUTPUT_ROOT}/<run-name> に保存する")
     parser.add_argument("--video", choices=[VIDEO_ON, VIDEO_OFF], required=True, help="評価動画を撮るか（全試行を 1 本に）")
     args = parser.parse_args(argv)
     if args.num_trials < 1:
         parser.error(f"--num-trials は 1 以上が必要: {args.num_trials}")
+    if args.trial_indices == ALL_TRIALS:
+        args.trial_indices = list(range(args.num_trials))
+    else:
+        indices = [int(index) for index in args.trial_indices.split(",")]
+        if not indices or any(not 0 <= index < args.num_trials for index in indices):
+            parser.error(f"--trial-indices は 0 以上 {args.num_trials} 未満の番号が必要: {args.trial_indices}")
+        args.trial_indices = indices
     return args
 
 
@@ -200,7 +214,7 @@ def _run_trials(
         recorder = GenesisVideoRecorder(simulation.scene.camera, output_dir / VIDEO_FILENAME, gait_env.control_dt_s)
         recorder.start()
     records = []
-    for trial_index in range(args.num_trials):
+    for trial_index in args.trial_indices:
         rows = slice(trial_index, trial_index + 1)
         record = runner.run_trial(
             trial_index, tuple(pos[rows].cpu() for pos in dof_pos), tuple(xy[rows].cpu() for xy in start_xy)
@@ -256,6 +270,7 @@ def _summary(args: argparse.Namespace, inputs: _Inputs, rows: list[dict[str, obj
             "team_config": inputs.settings.team_config,
             "mode": args.mode,
             "seed": args.seed,
+            "num_trials_sampled": args.num_trials,
             "num_robots": len(scene.robots),
             "box_mass_kg": scene.box.mass_kg,
             "push_speed_mps": inputs.run.settings.team.push_control.push_speed_mps,
