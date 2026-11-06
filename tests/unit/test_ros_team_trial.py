@@ -10,6 +10,8 @@ from cooperative_go2.entities.go2_state import Go2Proprioception, Go2State
 from cooperative_go2.entities.rigid_body_pose import RigidBodyPose
 from cooperative_go2.use_cases.joint_target_scheduler import JointTargetScheduler, JointTargetTiming
 from cooperative_go2.use_cases.ros_team_trial import (
+    DIVERGED_BEFORE_RESULT,
+    NoTaskResultError,
     NoTeamJointTargetsAppliedError,
     TaskResult,
     TeamTrialPorts,
@@ -158,7 +160,7 @@ def test_box_held_in_retreat_area_counts_as_success() -> None:
     world = FakeTeamWorld()
     world.box_path = {10: (*BOX_IN_RETREAT, 0.0)}
 
-    record = run(world, ScriptedPeers(SUCCESS, after_polls=100))
+    record = run(world, ScriptedPeers(SUCCESS, after_polls=30))
 
     # 0.2 s に入り、判定の周期（0.1 s）ごとに測って 1.0 s 続いた 1.2 s に成功とみなす
     assert record.success is True
@@ -190,15 +192,13 @@ def test_task_result_is_recorded_separately_from_ground_truth() -> None:
     assert record.end_time_s == pytest.approx(0.4)
 
 
-def test_trial_without_task_result_stops_at_max_trial_time() -> None:
+def test_missing_task_result_is_an_error_instead_of_a_failed_trial() -> None:
     world = FakeTeamWorld()
     peers = ScriptedPeers(None, after_polls=0)
 
-    record = run(world, peers)
-
-    assert record.task_success is False
-    assert record.task_reason == "NO_TASK_RESULT"
-    assert record.end_time_s == pytest.approx(SETUP.max_trial_ns / 1e9)
+    # タスク管理は自分の時間切れで必ず結果を返すので、届かないのはノードが動いていないこと（評価の失敗に混ぜない）
+    with pytest.raises(NoTaskResultError):
+        run(world, peers)
     assert peers.ended is True
 
 
@@ -210,6 +210,7 @@ def test_divergence_stops_the_trial() -> None:
 
     # 発散したステップを含む判定の周期（0.2 s）の終わりで止める
     assert record.diverged is True
+    assert record.task_reason == DIVERGED_BEFORE_RESULT
     assert record.end_time_s == pytest.approx(0.2)
 
 

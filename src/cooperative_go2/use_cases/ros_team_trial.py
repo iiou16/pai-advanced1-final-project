@@ -22,6 +22,8 @@ from cooperative_go2.entities.rigid_body_pose import RigidBodyPose
 from cooperative_go2.use_cases.joint_target_scheduler import JointTargetScheduler, TargetSelection
 
 ROLL_COLUMN, PITCH_COLUMN = 0, 1
+# タスク管理の結果が届く前に物理計算が発散して試行を止めたときの、タスク管理の終わった理由の代わりの記録
+DIVERGED_BEFORE_RESULT = "DIVERGED_BEFORE_RESULT"
 
 
 class NoTeamJointTargetsAppliedError(RuntimeError):
@@ -29,6 +31,14 @@ class NoTeamJointTargetsAppliedError(RuntimeError):
 
     そのロボットの歩行方策のノードが動いていない、または状態や目標が届いていない。既定姿勢のまま終わった試行を、
     制御の成績として記録しないために止める。
+    """
+
+
+class NoTaskResultError(RuntimeError):
+    """試行を打ち切る時間（max_trial_ns）までに、タスク管理の結果が届かなかったことを表す。
+
+    タスク管理は自分の時間切れで必ず結果を返すので、届かないのはタスク管理か協調のノードが動いていないことを表す。
+    評価の失敗の試行として記録せず、実行を止める。
     """
 
 
@@ -104,7 +114,10 @@ class TeamTaskPeers(Protocol):
         ...
 
     def find_task_result_or_none(self) -> TaskResult | None:
-        """依頼の結果が届いていれば返す。まだなら None。"""
+        """依頼の結果が届いていれば返す。まだなら None。
+
+        タスク管理が依頼を結果を返さずに終えた（中断・取り消し）ときは、試行の失敗ではなく実行の誤りとして例外を送出する。
+        """
         ...
 
     def find_first_push_stamps_ns(self) -> dict[str, int]:
@@ -160,8 +173,8 @@ class TeamTrialRecord:
     Attributes:
         trial_index: 試行の番号。
         success: 真値で、箱の中心が退避領域に入ったまま verify_hold_s 続いた。
-        task_success: タスク管理が成功を返した。結果が届かずに打ち切ったら False。
-        task_reason: タスク管理が返した終わった理由。届かなければ NO_TASK_RESULT。
+        task_success: タスク管理が成功を返した。結果が届く前に物理計算が発散したら False。
+        task_reason: タスク管理が返した終わった理由。結果が届く前に物理計算が発散したら DIVERGED_BEFORE_RESULT。
         corridor_opened: 真値で、試行中に通路が開いた。
         open_time_s: 通路が初めて開いた時刻（試行の始めから）[s]。開かなければ None。
         success_time_s: 真値で成功とみなした時刻 [s]。成功しなければ None。
@@ -238,6 +251,7 @@ class TeamTrialRunner:
 
         Raises:
             NoTeamJointTargetsAppliedError: いずれかのロボットの関節目標を一度も適用できなかった。
+            NoTaskResultError: 物理計算が発散しないまま、max_trial_ns までにタスク管理の結果が届かなかった。
         """
         ports, setup = self._ports, self._setup
         self._now_ns += setup.control_dt_ns
@@ -279,6 +293,10 @@ class TeamTrialRunner:
             task_result = ports.peers.find_task_result_or_none()
         push_stamps = ports.peers.find_first_push_stamps_ns()
         ports.peers.end_task()
+        if task_result is None and not diverged:
+            raise NoTaskResultError(
+                f"試行 {trial_index} で {ns_to_seconds(setup.max_trial_ns)} s 以内にタスク管理の結果が届かなかった"
+            )
         for name, steps in zip(setup.robot_names, policy_steps, strict=True):
             if steps == 0:
                 raise NoTeamJointTargetsAppliedError(f"試行 {trial_index} で {name} の関節目標を一度も適用できなかった")
@@ -323,7 +341,7 @@ class TeamTrialRunner:
             trial_index=trial_index,
             success=progress.success_ns is not None,
             task_success=task_result is not None and task_result.success,
-            task_reason="NO_TASK_RESULT" if task_result is None else task_result.termination_reason,
+            task_reason=DIVERGED_BEFORE_RESULT if task_result is None else task_result.termination_reason,
             corridor_opened=progress.open_ns is not None,
             open_time_s=since_start(progress.open_ns),
             success_time_s=since_start(progress.success_ns),

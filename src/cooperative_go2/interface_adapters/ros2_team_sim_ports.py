@@ -142,6 +142,7 @@ class RosTeamTaskPeers:
         self._lock = threading.Lock()
         self._goal_handle: ClientGoalHandle | None = None
         self._task_result: TaskResult | None = None
+        self._task_error: str | None = None
         self._trial_start_ns: int | None = None
         self._first_push_ns: dict[str, int] = {}
         node.create_subscription(AgentStatus, AGENT_STATUS_TOPIC, self._on_agent_status, TEAM_STATUS_QOS)
@@ -190,6 +191,7 @@ class RosTeamTaskPeers:
             self._trial_start_ns = start_stamp_ns
             self._first_push_ns = {}
             self._task_result = None
+            self._task_error = None
         goal = ClearCorridor.Goal()
         goal.header.stamp = ns_to_time(start_stamp_ns)
         goal.header.frame_id = WORLD_FRAME
@@ -212,18 +214,21 @@ class RosTeamTaskPeers:
                         success=bool(response.result.success), termination_reason=response.result.termination_reason
                     )
                 else:
-                    # タスク管理が依頼を中断・取り消しで終えた（協調のノードが見つからない等）。結果が届かない試行と
-                    # 区別して失敗として記録し、打ち切りの時間まで待たずに試行を終える
-                    self._task_result = TaskResult(
-                        success=False,
-                        termination_reason=f"TASK_STATUS_{response.status}:{response.result.termination_reason}",
-                    )
+                    # タスク管理が依頼を中断・取り消しで終えた（協調のノードが見つからない、タスク管理が先に終わった等）。
+                    # 評価の失敗ではなく実行の誤りなので、次の問い合わせで例外にする
+                    self._task_error = f"状態 {response.status}（{response.result.termination_reason}）"
 
         handle.get_result_async().add_done_callback(on_result)
 
     def find_task_result_or_none(self) -> TaskResult | None:
-        """今の依頼の結果が届いていれば返す。まだなら None。"""
+        """今の依頼の結果が届いていれば返す。まだなら None。
+
+        Raises:
+            PeerNodeRejectedError: タスク管理が依頼を結果を返さずに終えた（中断・取り消し）。
+        """
         with self._lock:
+            if self._task_error is not None:
+                raise PeerNodeRejectedError(f"タスク管理が通路の開通の依頼を結果を返さずに終えた: {self._task_error}")
             return self._task_result
 
     def find_first_push_stamps_ns(self) -> dict[str, int]:
@@ -241,7 +246,8 @@ class RosTeamTaskPeers:
         with self._lock:
             handle = self._goal_handle
             self._goal_handle = None
-        if handle is None or self.find_task_result_or_none() is not None:
+            finished = self._task_result is not None or self._task_error is not None
+        if handle is None or finished:
             return
         response = self._wait(handle.cancel_goal_async(), "通路の開通の依頼の取り消し")
         if response.return_code not in ACCEPTED_CANCEL_RETURN_CODES:

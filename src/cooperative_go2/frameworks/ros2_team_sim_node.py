@@ -63,6 +63,7 @@ from cooperative_go2.interface_adapters.ros2_team_sim_ports import (
 )
 from cooperative_go2.use_cases.joint_target_scheduler import JointTargetScheduler, JointTargetTiming
 from cooperative_go2.use_cases.ros_team_trial import (
+    NoTaskResultError,
     NoTeamJointTargetsAppliedError,
     TeamTrialPorts,
     TeamTrialRecord,
@@ -359,7 +360,7 @@ def main(argv: list[str] | None = None) -> None:
     except SimulationSetupError as error:
         logger.error("%s%s", error, left)
         sys.exit(EXIT_SIMULATION_SETUP_FAILED)
-    except (PeerNodeTimeoutError, PeerNodeRejectedError, NoTeamJointTargetsAppliedError) as error:
+    except (PeerNodeTimeoutError, PeerNodeRejectedError, NoTeamJointTargetsAppliedError, NoTaskResultError) as error:
         executor_error = executor_thread.find_error_or_none()
         if executor_error is not None:
             logger.error("ROS 2 の受信のスレッドが止まった: %r（%s）%s", executor_error, error, left)
