@@ -1,0 +1,20 @@
+# ROS 2 を経由した通路の開通・2 台（E4・E5）の設定。シミュレーション・タスク管理・協調のノードが読む。
+# 指令の有効期限と実時間の条件は、1 台の箱押し（configs/ros2_push_single.yaml）と同じにする。
+# すべてのキーが必須。読み込み時に過不足・型・値の範囲を検証する。
+
+# 作業の設定（シーン・押す側の割り当て・制御・状態機械・開始位置・タスク管理）
+team_config: configs/team_rule_based.yaml
+
+# 受け手が指令を古いとみなすまでの時間 [s]（シミュレーション時間）。超えたら停止の指令に切り替え、送り手が止まったらロボットも止める
+command_expiry:
+  # 協調のノードは 0.1 s ごとに指令を出す
+  velocity_command_s: 0.3
+  # 歩行方策は 0.02 s ごとに目標を出し、学習時と同じく 1 周期遅れ（0.02 s）で適用する
+  joint_target_s: 0.1
+
+runtime:
+  max_real_time_factor: 1.0
+  startup_timeout_s: 120.0
+  reply_timeout_s: 10.0
+  # PyTorch が CPU の計算に使うスレッドの数。1 台分の小さなネットワークの推論では、複数のスレッドを調整する手間の方が大きい
+  torch_num_threads: 1

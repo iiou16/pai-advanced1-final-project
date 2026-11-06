@@ -23,6 +23,7 @@ from cooperative_go2.entities.push_task_config import (
     PushTrainingRunConfig,
     require_rule_based_within_commands,
 )
+from cooperative_go2.entities.team_task_config import TeamRuleBasedConfig
 from cooperative_go2.interface_adapters.genesis_scene_config import GenesisSceneConfig, require_genesis_friction
 from cooperative_go2.interface_adapters.rsl_rl_config import RslRlPpoConfig
 
@@ -84,6 +85,29 @@ class GaitPolicySource:
 
     run_dir: str
     checkpoint: int
+
+
+@dataclass(frozen=True)
+class TeamRuleBasedSettings:
+    """規則ベースで箱を押す作業の設定ファイル（configs/team_rule_based.yaml 形式）1 つ分。
+
+    Attributes:
+        scene_config: 通路のシーンの設定ファイル（configs/scenes/*.yaml）。相対パスは現在の作業ディレクトリ起点。
+        gait_policy: 固定して使う歩行方策。
+        team: 押す側の割り当て・制御・状態機械・開始位置の設定。
+    """
+
+    scene_config: str
+    gait_policy: GaitPolicySource
+    team: TeamRuleBasedConfig
+
+
+@dataclass(frozen=True)
+class TeamRunSettings:
+    """規則ベースで箱を押す作業の設定と、それが指すシーンの設定。ロボットの数がそろっていることを確かめてある。"""
+
+    settings: TeamRuleBasedSettings
+    scene: CorridorSceneSettings
 
 
 @dataclass(frozen=True)
@@ -172,6 +196,21 @@ class Ros2PushSettings:
     runtime: Ros2RuntimeConfig
 
 
+@dataclass(frozen=True)
+class Ros2TeamSettings:
+    """ROS 2 を経由した通路の開通（1 台・2 台）の設定ファイル（configs/ros2_team.yaml 形式）1 つ分。
+
+    Attributes:
+        team_config: 作業の設定ファイル（configs/team_rule_based*.yaml 形式）。相対パスは現在の作業ディレクトリ起点。
+        command_expiry: 速度指令と関節目標の有効期限。
+        runtime: 実時間の条件。
+    """
+
+    team_config: str
+    command_expiry: CommandExpiryConfig
+    runtime: Ros2RuntimeConfig
+
+
 def load_ros2_push_settings(path: Path) -> Ros2PushSettings:
     """ROS 2 を経由した 1 台の箱押しの設定ファイルを読み込み、検証済みの設定を返す。
 
@@ -245,6 +284,42 @@ def load_corridor_scene_settings(path: Path) -> CorridorSceneSettings:
         return CorridorSceneSettings(scene=scene, genesis=genesis)
     except InvalidConfigError as error:
         raise ConfigValidationError(f"{path}: {error}") from error
+
+
+def load_ros2_team_settings(path: Path) -> Ros2TeamSettings:
+    """ROS 2 を経由した通路の開通の設定ファイルを読み込み、検証済みの設定を返す。
+
+    Args:
+        path: 設定ファイル（configs/ros2_team.yaml 形式）。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
+    """
+    return _build_dataclass(Ros2TeamSettings, _read_yaml(path), _ROOT_KEY_PATH)
+
+
+def load_team_run_settings(path: Path) -> TeamRunSettings:
+    """規則ベースで箱を押す作業の設定ファイルと、それが指すシーンの設定ファイルを読み込み、検証済みの設定を返す。
+
+    Args:
+        path: 作業の設定ファイル（configs/team_rule_based.yaml 形式）。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: 作業またはシーンの設定ファイルが無い。
+        ConfigValidationError: YAML として読めない、キーの過不足・型・値が不正、または押す側の割り当ての数が
+            シーンのロボットの数と違う。
+    """
+    settings = _build_dataclass(TeamRuleBasedSettings, _read_yaml(path), _ROOT_KEY_PATH)
+    scene = load_corridor_scene_settings(Path(settings.scene_config))
+    num_offsets = len(settings.team.push_lateral_offsets_m)
+    num_robots = len(scene.scene.robots)
+    if num_offsets != num_robots:
+        raise ConfigValidationError(
+            f"{path}: team.push_lateral_offsets_m の数 {num_offsets} がシーン {settings.scene_config} の"
+            f"ロボットの数 {num_robots} と違う"
+        )
+    return TeamRunSettings(settings=settings, scene=scene)
 
 
 def load_push_training_settings(path: Path) -> PushTrainingSettings:
