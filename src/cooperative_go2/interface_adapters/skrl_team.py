@@ -23,7 +23,7 @@ from cooperative_go2.entities.push_termination import PushTerminationReason
 from cooperative_go2.entities.team_marl_observation import TEAM_ACTOR_OBSERVATION_DIM, team_state_dim
 from cooperative_go2.entities.velocity_command import VELOCITY_COMMAND_SIZE
 from cooperative_go2.interface_adapters.skrl_marl_config import MarlAlgorithm, MarlVariant, SkrlMarlPpoConfig
-from cooperative_go2.interface_adapters.team_marl_env import Go2TeamMarlEnv
+from cooperative_go2.interface_adapters.team_marl_env import Go2TeamMarlEnv, TeamSizeError
 
 OBSERVATIONS_KEY = "observations"
 STATES_KEY = "states"
@@ -31,7 +31,10 @@ POLICY_ROLE = "policy"
 VALUE_ROLE = "value"
 # skrl が 1 回の書き出しで記録する、終わったエピソードの集計の置き場所（SequentialTrainer の environment_info）
 EPISODE_INFO_KEY = "episode"
-_ALGORITHMS: Mapping[MarlAlgorithm, type[MultiAgent]] = {MarlAlgorithm.IPPO: IPPO, MarlAlgorithm.MAPPO: MAPPO}
+# リセットする前の観測と状態の置き場所。時間切れのエピソードの続きの価値を、次のエピソードではなく終わった時点の
+# 観測と状態で見積もるために、エージェントへ渡す
+TERMINAL_OBSERVATIONS_INFO_KEY = "terminal_observations"
+TERMINAL_STATES_INFO_KEY = "terminal_states"
 # Critic が読む入力。IPPO は自分の観測、MAPPO は全体の真の状態
 CRITIC_INPUT_KEYS: Mapping[MarlAlgorithm, str] = {MarlAlgorithm.IPPO: OBSERVATIONS_KEY, MarlAlgorithm.MAPPO: STATES_KEY}
 
@@ -62,11 +65,11 @@ class SkrlTeamEnv(MultiAgentEnvWrapper):
         """環境と、シーンの robots と同じ順のロボットの名前を受け取る。
 
         Raises:
-            ValueError: agent_names の数が環境のロボットの数と違う。
+            TeamSizeError: agent_names の数が環境のロボットの数と違う。
         """
         super().__init__(env)
         if len(agent_names) != env.num_agents:
-            raise ValueError(f"ロボット {env.num_agents} 台分の名前が必要: {agent_names}")
+            raise TeamSizeError(f"ロボット {env.num_agents} 台分の名前が必要: {agent_names}")
         self._team_env = env
         self._names = list(agent_names)
         action_space = gymnasium.spaces.Box(
@@ -128,7 +131,10 @@ class SkrlTeamEnv(MultiAgentEnvWrapper):
         time_out = outcome.termination_reasons == int(PushTerminationReason.TIME_OUT)
         terminated = (outcome.done & ~time_out).unsqueeze(1)
         truncated = time_out.unsqueeze(1)
-        infos: dict[str, object] = {}
+        infos: dict[str, object] = {
+            TERMINAL_OBSERVATIONS_INFO_KEY: self._by_name(outcome.terminal_observations),
+            TERMINAL_STATES_INFO_KEY: self._by_name(outcome.terminal_states),
+        }
         if outcome.episode_summary is not None:
             infos[EPISODE_INFO_KEY] = outcome.episode_summary.as_log()
         return (
@@ -151,6 +157,55 @@ class SkrlTeamEnv(MultiAgentEnvWrapper):
 
     def _by_name(self, values: tuple[torch.Tensor, ...]) -> dict[str, torch.Tensor]:
         return {name: value for name, value in zip(self._names, values, strict=True)}
+
+
+def replace_truncated_rows(
+    next_values: dict[str, torch.Tensor], terminal_values: dict[str, torch.Tensor], truncated: dict[str, torch.Tensor]
+) -> dict[str, torch.Tensor]:
+    """エージェントごとに、時間切れの環境（truncated (num_envs, 1) が True）の行だけを終わった時点の値にした辞書を返す。"""
+    return {name: torch.where(truncated[name], terminal_values[name], value) for name, value in next_values.items()}
+
+
+class _TerminalValueBootstrap:
+    """時間切れのエピソードの続きの価値を、終わった時点の観測と状態で見積もるようにする、IPPO・MAPPO への追加。
+
+    skrl は時間切れの環境の報酬に「割引率 × 次の観測・状態の価値」を足すが、並列環境は終わった環境をすぐリセットするので、
+    受け取る次の観測・状態は次のエピソードの最初のものになる。それでは MAPPO の Critic はエピソードの経過 0 の状態の
+    価値を、IPPO の Critic は相手の状態がまだ届いていない観測の価値を足すことになり、ずれ方が 2 つの方式で違う。
+    そこで、記録の前に時間切れの行だけを、環境が infos に入れたリセット前の観測・状態に置き換える。
+    置き換えた値は、次の更新の最後の価値の見積もりにも使われるが、時間切れの行は GAE がそこでエピソードを区切るので影響しない。
+    次の行動を決める観測は、学習の流れ（SequentialTrainer）が別に持つので変わらない。
+    """
+
+    def record_transition(
+        self, *, next_observations: dict[str, torch.Tensor], next_states: dict[str, torch.Tensor],
+        truncated: dict[str, torch.Tensor], infos: dict[str, object], **kwargs: object,
+    ) -> None:  # fmt: skip
+        """時間切れの行の次の観測・状態を、終わった時点の値に置き換えてから記録する。
+
+        Raises:
+            KeyError: infos に終わった時点の観測・状態が無い（SkrlTeamEnv 以外の環境で使った）。
+        """
+        terminal_observations = infos[TERMINAL_OBSERVATIONS_INFO_KEY]
+        terminal_states = infos[TERMINAL_STATES_INFO_KEY]
+        super().record_transition(  # type: ignore[misc]
+            next_observations=replace_truncated_rows(next_observations, terminal_observations, truncated),  # type: ignore[arg-type]
+            next_states=replace_truncated_rows(next_states, terminal_states, truncated),  # type: ignore[arg-type]
+            truncated=truncated,
+            infos=infos,
+            **kwargs,
+        )
+
+
+class TeamIPPO(_TerminalValueBootstrap, IPPO):
+    """時間切れのエピソードの続きの価値を、終わった時点の観測で見積もる IPPO。"""
+
+
+class TeamMAPPO(_TerminalValueBootstrap, MAPPO):
+    """時間切れのエピソードの続きの価値を、終わった時点の状態で見積もる MAPPO。"""
+
+
+_ALGORITHMS: Mapping[MarlAlgorithm, type[MultiAgent]] = {MarlAlgorithm.IPPO: TeamIPPO, MarlAlgorithm.MAPPO: TeamMAPPO}
 
 
 class TeamPolicy(GaussianMixin, Model):

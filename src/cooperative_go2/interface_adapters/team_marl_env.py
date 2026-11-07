@@ -143,6 +143,9 @@ class TeamStepOutcome:
     Attributes:
         observations: ロボットごとの、次の行動を決めるための Actor の観測。終了した環境はリセット後の観測。
         states: ロボットごとの、Critic の状態。終了した環境はリセット後の状態。
+        terminal_observations: ロボットごとの、リセットする前の Actor の観測（終わったエピソードの最後の観測）。
+            終了しなかった環境では observations と同じ。時間切れのエピソードの続きの価値を見積もるのに使う。
+        terminal_states: ロボットごとの、リセットする前の Critic の状態。終了しなかった環境では states と同じ。
         rewards: ロボットごとの報酬 (ロボットの数, num_envs)。物理計算が発散した環境は 0。
         done: エピソードが終わった環境のマスク (num_envs,)。2 台で共有する。
         termination_reasons: 環境ごとの終了理由 (num_envs,)。PushTerminationReason の値。
@@ -153,6 +156,8 @@ class TeamStepOutcome:
 
     observations: tuple[torch.Tensor, ...]
     states: tuple[torch.Tensor, ...]
+    terminal_observations: tuple[torch.Tensor, ...]
+    terminal_states: tuple[torch.Tensor, ...]
     rewards: torch.Tensor
     done: torch.Tensor
     termination_reasons: torch.Tensor
@@ -334,11 +339,15 @@ class Go2TeamMarlEnv:
             fallen=fallen,
             corridor_open=is_corridor_open(footprint, self._setup.scene.corridor),
         )
+        self._observe()
+        terminal_observations, terminal_states = self._observations, self._states
         self._reset_envs(done)
         self._observe()
         return TeamStepOutcome(
             observations=self._observations,
             states=self._states,
+            terminal_observations=terminal_observations,
+            terminal_states=terminal_states,
             rewards=reward_terms.per_robot_total(),
             done=done,
             termination_reasons=reasons,
