@@ -27,6 +27,8 @@ go2-train-gait = "cooperative_go2.frameworks.train_gait:main"
 go2-evaluate-gait = "cooperative_go2.frameworks.evaluate_gait:main"
 go2-evaluate-push = "cooperative_go2.frameworks.evaluate_push:main"
 go2-train-push = "cooperative_go2.frameworks.train_push:main"
+go2-train-team-marl = "cooperative_go2.frameworks.train_team_marl:main"
+go2-evaluate-team-marl = "cooperative_go2.frameworks.evaluate_team_marl:main"
 # ROS 2 の実行系のノード。/opt/ros/jazzy と ros2_ws/install の setup.bash を source したシェルで動かす
 go2-ros2-sim = "cooperative_go2.frameworks.ros2_sim_node:main"
 go2-ros2-gait = "cooperative_go2.frameworks.ros2_gait_node:main"
