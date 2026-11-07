@@ -31,6 +31,9 @@ class AgentStatusReport:
         phase: 作業の段階。
         push_position_xy_m: 押すために立つ位置 (x, y) [m]。
         push_dir_xy: 押す方向の単位ベクトル (x, y)。
+        position_xy_m: stamp_ns の状態の自分の胴体の位置 (x, y) [m]。
+        yaw_rad: stamp_ns の状態の自分のヨー角 [rad]。
+        command: stamp_ns の状態から決めた速度指令 (vx [m/s], vy [m/s], yaw_rate [rad/s])。
     """
 
     agent_id: str
@@ -38,6 +41,9 @@ class AgentStatusReport:
     phase: TeamPhase
     push_position_xy_m: tuple[float, float]
     push_dir_xy: tuple[float, float]
+    position_xy_m: tuple[float, float]
+    yaw_rad: float
+    command: tuple[float, float, float]
 
     @property
     def ready(self) -> bool:
@@ -59,6 +65,9 @@ def make_agent_status(report: AgentStatusReport, frame_id: str) -> AgentStatus:
     message.push_position = Point(x=report.push_position_xy_m[0], y=report.push_position_xy_m[1], z=0.0)
     message.push_direction = Vector3(x=report.push_dir_xy[0], y=report.push_dir_xy[1], z=0.0)
     message.ready = report.ready
+    message.position = Point(x=report.position_xy_m[0], y=report.position_xy_m[1], z=0.0)
+    message.yaw = report.yaw_rad
+    message.command = Vector3(x=report.command[0], y=report.command[1], z=report.command[2])
     return message
 
 
@@ -78,4 +87,7 @@ def read_agent_status(message: AgentStatus) -> AgentStatusReport:
         phase=phase,
         push_position_xy_m=(message.push_position.x, message.push_position.y),
         push_dir_xy=(message.push_direction.x, message.push_direction.y),
+        position_xy_m=(message.position.x, message.position.y),
+        yaw_rad=message.yaw,
+        command=(message.command.x, message.command.y, message.command.z),
     )

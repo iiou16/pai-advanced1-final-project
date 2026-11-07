@@ -20,3 +20,9 @@ geometry_msgs/Point push_position
 geometry_msgs/Vector3 push_direction
 # 押し始める準備ができているか
 bool ready
+# 配信した時点（header.stamp の状態）の自分の胴体の位置 [m]（z は使わない）とヨー角 [rad]。
+# 学習した協調の方策が、相手の位置と向きとして観測に入れる
+geometry_msgs/Point position
+float64 yaw
+# 配信した時点に決めた速度指令（x: vx [m/s]、y: vy [m/s]、z: yaw_rate [rad/s]、本体座標系）。押す意図として相手に伝える
+geometry_msgs/Vector3 command

@@ -106,8 +106,9 @@ def test_twist_round_trip_uses_vx_vy_and_yaw_rate() -> None:
 
 def test_agent_status_round_trip() -> None:
     report = AgentStatusReport(
-        agent_id="go2_b", stamp_ns=STAMP_NS, phase=TeamPhase.PUSH, push_position_xy_m=(0.8, -0.25), push_dir_xy=(1.0, 0.0)
-    )
+        agent_id="go2_b", stamp_ns=STAMP_NS, phase=TeamPhase.PUSH, push_position_xy_m=(0.8, -0.25), push_dir_xy=(1.0, 0.0),
+        position_xy_m=(0.75, -0.3), yaw_rad=0.1, command=(0.6, 0.0, -0.2),
+    )  # fmt: skip
 
     message = make_agent_status(report, "map")
 

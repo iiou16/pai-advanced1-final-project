@@ -1,12 +1,17 @@
-"""ROS 2 の協調のノード。1 台のロボットの、規則ベースで箱を押す判断を動かす。
+"""ROS 2 の協調のノード。1 台のロボットの、箱を押す判断（規則ベースの協調、または学習した協調の方策）を動かす。
 
 Genesis を読み込まず、物理ステップを進められない。作業はタスク管理のノードから ClearCorridor のアクションで受ける。
-依頼の時刻（試行の始め）から high_level_period_s ごとの状態で、状態機械を進めて速度指令を決める。
-作業の状態と押す意図を /team/agent_status に配信し、協調のモード（cooperative・cooperative_wait）では相手の状態を
-受け取って準備の判定に使う。通信なしの独立制御（independent）と 1 台では相手の状態を購読しない（配信は記録のために行う）。
+依頼の時刻（試行の始め）から判断の周期ごとの状態で判断し、速度指令を決める。判断の中身は判断器（TeamDecider）に任せる。
+作業の状態・押す意図・自分の位置と指令を /team/agent_status に配信する。協調のモード（cooperative・cooperative_wait）と
+学習した方策（learned）では相手の状態を受け取って判断に使う。通信なしの独立制御（independent）と 1 台では相手の状態を
+購読しない（配信は記録のために行う）。
 
 起動例（launch から起動する。Namespace でロボットを分ける）:
-    go2-ros2-team-coord --config configs/team_rule_based.yaml --mode cooperative --metrics-dir outputs/<run>/nodes \\
+    go2-ros2-team-coord --config configs/ros2_team.yaml --mode cooperative --metrics-dir outputs/<run>/nodes \\
+        --ros-args -r __ns:=/go2_a -r __node:=coord_policy -p use_sim_time:=true
+学習した協調の方策で動かす例:
+    go2-ros2-team-coord --config configs/ros2_team.yaml --mode learned \\
+        --policy-run-dir outputs/team_marl/mappo-shared-seed21 --policy-iteration 1000 --metrics-dir outputs/<run>/nodes \\
         --ros-args -r __ns:=/go2_a -r __node:=coord_policy -p use_sim_time:=true
 """
 
@@ -34,18 +39,24 @@ from rclpy.utilities import remove_ros_args
 
 from cooperative_go2.entities.command_expiry import ns_to_seconds, seconds_to_ns
 from cooperative_go2.entities.coordination_state_machine import TeamPhase
-from cooperative_go2.entities.push_observation import PlanarBodyState
-from cooperative_go2.entities.push_trial import PlanarPose
-from cooperative_go2.entities.quaternion import roll_pitch_deg_from_quat_wxyz
+from cooperative_go2.entities.rigid_body_pose import RigidBodyPose
 from cooperative_go2.entities.velocity_command import VELOCITY_COMMAND_SIZE
 from cooperative_go2.interface_adapters.config_loader import (
     ConfigValidationError,
+    TeamMarlTrainingSettings,
     TeamRunSettings,
     load_ros2_team_settings,
     load_team_run_settings,
 )
 from cooperative_go2.interface_adapters.ros2_messages import StampedPose, make_twist_stamped, read_odometry, time_to_ns
 from cooperative_go2.interface_adapters.ros2_metrics import LatencyStats, write_node_metrics
+from cooperative_go2.interface_adapters.ros2_team_deciders import (
+    LEARNED_MODE,
+    LearnedTeamDecider,
+    RuleBasedTeamDecider,
+    TeamDecider,
+    TeamDecision,
+)
 from cooperative_go2.interface_adapters.ros2_team_messages import (
     AgentStatusReport,
     make_agent_status,
@@ -64,14 +75,11 @@ from cooperative_go2.interface_adapters.ros2_topics import (
     WORLD_FRAME,
     robot_frame,
 )
+from cooperative_go2.interface_adapters.rsl_rl_policy import CheckpointLoadError, CheckpointNotFoundError
+from cooperative_go2.interface_adapters.skrl_team_policy import load_team_policy, load_team_run_settings_copy
 from cooperative_go2.use_cases.stamp_aligner import AlignedValues, StampAligner
-from cooperative_go2.use_cases.team_push_agent import (
-    CoordinationMode,
-    RetreatArea,
-    TeamPushAgent,
-    TeamPushAgentInputs,
-    TeamPushDecision,
-)
+from cooperative_go2.use_cases.team_policy_driver import TeamPolicyDriver
+from cooperative_go2.use_cases.team_push_agent import CoordinationMode, RetreatArea
 
 NODE_NAME = "coord_policy"
 ROBOT_SOURCE = "odom"
@@ -86,6 +94,8 @@ SPIN_TIMEOUT_S = 0.1
 EXIT_INVALID_INPUT = 2
 ROLL_COLUMN, PITCH_COLUMN = 0, 1
 COOPERATIVE_TEAM_SIZE = 2
+# 学習した方策の推論は 1 台分の小さな計算なので CPU で行う（シミュレーションノードと GPU を取り合わない）
+CPU = "cpu"
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +108,27 @@ class CooperativeTeamSizeError(ValueError):
     """協調のモードで、シーンのロボットが 2 台でないことを表す。相手の状態の判定は相手が 1 台だけの前提で作っている。"""
 
 
+class PolicyConditionMismatchError(ValueError):
+    """学習した方策の学習時の条件（シーン・判断の周期）が、ROS 2 の実行系の設定と違うことを表す。"""
+
+
+@dataclass(frozen=True)
+class TeamCoordSetup:
+    """協調のノードの組み立てに使う値。
+
+    Attributes:
+        decider: 判断の中身。
+        robot_names: シーンの robots の名前（同じ順）。
+        period_s: 判断の周期 [s]（シミュレーション時間）。
+        uses_partner: 相手の状態を購読して判断器に渡すか。
+    """
+
+    decider: TeamDecider
+    robot_names: tuple[str, ...]
+    period_s: float
+    uses_partner: bool
+
+
 @dataclass
 class _ActiveGoal:
     handle: ServerGoalHandle
@@ -107,37 +138,27 @@ class _ActiveGoal:
     next_decision_index: int = 0
     verify_started_ns: int | None = None
     last_decision_ns: int | None = None
-    final: TeamPushDecision | None = None
+    final: TeamDecision | None = None
 
 
 class TeamCoordNode:
     """協調のノード。受信とアクションの処理を複数のスレッドで並行して行い、判断の状態はロックで守る。"""
 
-    def __init__(self, node: Node, run: TeamRunSettings, mode: CoordinationMode) -> None:
-        """ノード・作業の設定・協調のモードを受け取り、購読・配信・アクションを作る。
+    def __init__(self, node: Node, setup: TeamCoordSetup) -> None:
+        """ノードと組み立てに使う値を受け取り、購読・配信・アクションを作る。
 
-        Raises:
-            RobotNotInSceneError: ノードの Namespace のロボットがシーンの設定にいない。
+        前提: ノードの Namespace のロボットが setup.robot_names にいること（_make_setup() で確かめる）。
         """
         self._node = node
         self._robot_name = node.get_namespace().strip("/")
-        names = [robot.name for robot in run.scene.scene.robots]
-        if self._robot_name not in names:
-            raise RobotNotInSceneError(f"Namespace のロボット {self._robot_name!r} がシーンの robots {names} にいない")
-        if mode is not CoordinationMode.INDEPENDENT and len(names) != COOPERATIVE_TEAM_SIZE:
-            raise CooperativeTeamSizeError(f"協調のモード {mode.value} はロボット 2 台で動かす: {names}")
-        team = run.settings.team
-        self._team = team
-        self._mode = mode
         # 相手の状態として受け取るのは、シーンの設定の自分以外のロボットだけ（協調のモードでは 2 台なので 1 台）
-        self._partner_names = frozenset(name for name in names if name != self._robot_name)
-        self._agent = TeamPushAgent(team, names.index(self._robot_name), mode)
-        self._period_ns = seconds_to_ns(team.high_level_period_s)
+        self._partner_names = frozenset(name for name in setup.robot_names if name != self._robot_name)
+        self._decider = setup.decider
+        self._period_ns = seconds_to_ns(setup.period_s)
         self._frame = robot_frame(node.get_namespace(), BASE_LINK_FRAME)
         self._lock = threading.Lock()
         self._aligner: StampAligner[StampedPose] = StampAligner(SOURCES, MAX_PENDING_STAMPS)
         self._latest: AlignedValues[StampedPose] | None = None
-        self._partner: AgentStatusReport | None = None
         self._goal: _ActiveGoal | None = None
         self._stopping = threading.Event()
         self.decision_time = LatencyStats()
@@ -148,7 +169,7 @@ class TeamCoordNode:
         self._status = node.create_publisher(AgentStatus, AGENT_STATUS_TOPIC, TEAM_STATUS_QOS)
         node.create_subscription(Odometry, ODOM_TOPIC, self._on_robot, SENSOR_QOS, callback_group=group)
         node.create_subscription(Odometry, OBJECT_STATE_TOPIC, self._on_box, SENSOR_QOS, callback_group=group)
-        if mode is not CoordinationMode.INDEPENDENT:
+        if setup.uses_partner:
             node.create_subscription(
                 AgentStatus, AGENT_STATUS_TOPIC, self._on_agent_status, TEAM_STATUS_QOS, callback_group=group
             )
@@ -176,9 +197,7 @@ class TeamCoordNode:
         if report.agent_id not in self._partner_names:
             return
         with self._lock:
-            # 遅れて届いた古い状態で、新しい状態を上書きしない
-            if self._partner is None or report.stamp_ns >= self._partner.stamp_ns:
-                self._partner = report
+            self._decider.observe_partner(report)
 
     def _put(self, source: str, value: StampedPose) -> None:
         with self._lock:
@@ -196,7 +215,7 @@ class TeamCoordNode:
             center_xy_m=(request.goal_position.x, request.goal_position.y), radius_m=request.goal_radius_m
         )
         with self._lock:
-            self._agent.start(retreat, now_s=ns_to_seconds(goal.start_stamp_ns))
+            self._decider.start(retreat, goal.start_stamp_ns)
             self._goal = goal
             # 試行の始めの状態が依頼より先に届いていれば、その状態で最初の判断をする
             if self._latest is not None:
@@ -219,14 +238,14 @@ class TeamCoordNode:
         last = goal.start_stamp_ns if goal.last_decision_ns is None else goal.last_decision_ns
         result.elapsed_sim_s = ns_to_seconds(last - goal.start_stamp_ns)
         final = goal.final
-        if final is not None and final.state.phase is TeamPhase.DONE:
+        if final is not None and final.phase is TeamPhase.DONE:
             result.success = True
             result.termination_reason = "SUCCESS"
             goal.handle.succeed()
-        elif final is not None and final.state.phase is TeamPhase.FAILED:
+        elif final is not None and final.phase is TeamPhase.FAILED:
             result.success = False
-            reason = final.state.failure_reason
-            result.termination_reason = "FAILED" if reason is None else reason.name
+            reason = final.failure_reason
+            result.termination_reason = "FAILED" if reason is None else reason
             goal.handle.succeed()
         elif goal.handle.is_cancel_requested:
             result.termination_reason = "CANCELED"
@@ -248,37 +267,23 @@ class TeamCoordNode:
             return
         goal.next_decision_index = elapsed_ns // self._period_ns + 1
         robot, box = (aligned.values[source].pose for source in SOURCES)
-        now_s = ns_to_seconds(aligned.stamp_ns)
-        partner = None
-        if self._mode is not CoordinationMode.INDEPENDENT and self._partner is not None:
-            partner = self._partner.to_partner_status()
-            self.partner_status_age.add(now_s - partner.stamp_s)
-        roll_pitch = roll_pitch_deg_from_quat_wxyz(robot.quat_wxyz)[0]
-        fallen = bool(roll_pitch.abs().max() > self._team.fall_tilt_deg)
         started = time.perf_counter()
-        decision = self._agent.decide(
-            TeamPushAgentInputs(
-                now_s=now_s,
-                robot=_planar_pose(robot.to_planar()),
-                box=_planar_pose(box.to_planar()),
-                partner=partner,
-                task_assigned=True,
-                fallen=fallen,
-            )
-        )
+        decision = self._decider.decide(aligned.stamp_ns, robot, box)
         self.decision_time.add(time.perf_counter() - started)
+        if decision.partner_age_s is not None:
+            self.partner_status_age.add(decision.partner_age_s)
         goal.last_decision_ns = aligned.stamp_ns
         self._cmd_vel.publish(make_twist_stamped(aligned.stamp_ns, self._frame, decision.commands))
-        self._status.publish(make_agent_status(self._report(aligned.stamp_ns, decision), WORLD_FRAME))
+        self._status.publish(make_agent_status(self._report(aligned.stamp_ns, robot, decision), WORLD_FRAME))
         self._publish_feedback(goal, aligned.stamp_ns, decision, box.position_m[0, :2])
-        if decision.state.phase in (TeamPhase.DONE, TeamPhase.FAILED):
+        if decision.phase in (TeamPhase.DONE, TeamPhase.FAILED):
             goal.final = decision
             goal.finished.set()
 
     def _publish_feedback(
-        self, goal: _ActiveGoal, stamp_ns: int, decision: TeamPushDecision, box_xy_m: torch.Tensor
+        self, goal: _ActiveGoal, stamp_ns: int, decision: TeamDecision, box_xy_m: torch.Tensor
     ) -> None:
-        if decision.state.phase is TeamPhase.VERIFY:
+        if decision.phase is TeamPhase.VERIFY:
             if goal.verify_started_ns is None:
                 goal.verify_started_ns = stamp_ns
         else:
@@ -291,13 +296,19 @@ class TeamCoordNode:
         feedback.in_goal_duration_s = ns_to_seconds(verify_ns)
         goal.handle.publish_feedback(feedback)
 
-    def _report(self, stamp_ns: int, decision: TeamPushDecision) -> AgentStatusReport:
+    def _report(self, stamp_ns: int, robot: RigidBodyPose, decision: TeamDecision) -> AgentStatusReport:
+        planar = robot.to_planar()
+        position = planar.position_xy_m[0]
+        command = decision.commands[0]
         return AgentStatusReport(
             agent_id=self._robot_name,
             stamp_ns=stamp_ns,
-            phase=decision.state.phase,
+            phase=decision.phase,
             push_position_xy_m=decision.push_position_xy_m,
             push_dir_xy=decision.push_dir_xy,
+            position_xy_m=(float(position[0]), float(position[1])),
+            yaw_rad=float(planar.yaw_rad[0]),
+            command=(float(command[0]), float(command[1]), float(command[2])),
         )
 
     def _publish_stop(self, goal: _ActiveGoal) -> None:
@@ -307,24 +318,81 @@ class TeamCoordNode:
         self._cmd_vel.publish(make_twist_stamped(stamp_ns, self._frame, stop))
 
 
-def _planar_pose(body: PlanarBodyState) -> PlanarPose:
-    position = body.position_xy_m[0]
-    return PlanarPose(x_m=float(position[0]), y_m=float(position[1]), yaw_rad=float(body.yaw_rad[0]))
+@dataclass(frozen=True)
+class _LoadedConfigs:
+    run: TeamRunSettings
+    policy: TeamMarlTrainingSettings | None
+
+
+def _load_configs(args: argparse.Namespace) -> _LoadedConfigs:
+    """ROS 2 の実行系の設定と、学習した方策で動かすならその学習時の設定を読み、条件がそろっていることを確かめる。
+
+    Raises:
+        FileNotFoundError, ConfigValidationError: 設定が無い・不正。
+        PolicyConditionMismatchError: 学習時のシーンか判断の周期が、ROS 2 の実行系の設定と違う。
+    """
+    run = load_team_run_settings(Path(load_ros2_team_settings(args.config).team_config))
+    if args.mode != LEARNED_MODE:
+        return _LoadedConfigs(run=run, policy=None)
+    policy = load_team_run_settings_copy(args.policy_run_dir)
+    # シミュレーションノードは ROS 2 の実行系の設定のシーンで物理を進めるので、学習時と同じシーン・周期でなければ比べられない
+    if policy.scene_config != run.settings.scene_config:
+        raise PolicyConditionMismatchError(
+            f"学習時のシーン {policy.scene_config} が実行系のシーン {run.settings.scene_config} と違う"
+        )
+    period_s = policy.task.episode.high_level_period_s
+    if period_s != run.settings.team.high_level_period_s:
+        raise PolicyConditionMismatchError(
+            f"学習時の判断の周期 {period_s} s が実行系の周期 {run.settings.team.high_level_period_s} s と違う"
+        )
+    return _LoadedConfigs(run=run, policy=policy)
+
+
+def _make_setup(args: argparse.Namespace, configs: _LoadedConfigs, robot_name: str) -> TeamCoordSetup:
+    """ノードの Namespace のロボットの判断器を組み立てる。
+
+    Raises:
+        RobotNotInSceneError: ロボットがシーンの設定にいない。
+        CooperativeTeamSizeError: 相手の状態を使うモードで、シーンのロボットが 2 台でない。
+        CheckpointNotFoundError, CheckpointLoadError: 学習した方策を読み込めない。
+    """
+    names = tuple(robot.name for robot in configs.run.scene.scene.robots)
+    if robot_name not in names:
+        raise RobotNotInSceneError(f"Namespace のロボット {robot_name!r} がシーンの robots {names} にいない")
+    uses_partner = args.mode != CoordinationMode.INDEPENDENT.value
+    if uses_partner and len(names) != COOPERATIVE_TEAM_SIZE:
+        raise CooperativeTeamSizeError(f"モード {args.mode} はロボット 2 台で動かす: {names}")
+    index = names.index(robot_name)
+    team = configs.run.settings.team
+    policy = configs.policy
+    if policy is None:
+        decider: TeamDecider = RuleBasedTeamDecider(team, index, CoordinationMode(args.mode))
+        return TeamCoordSetup(decider, names, team.high_level_period_s, uses_partner)
+    actor = load_team_policy(args.policy_run_dir, args.policy_iteration, robot_name, CPU)
+    driver = TeamPolicyDriver(actor.mean_commands, policy.task, policy.task.agent_side_signs[index])
+    return TeamCoordSetup(LearnedTeamDecider(driver), names, policy.task.episode.high_level_period_s, uses_partner)
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="ROS 2 の協調のノード（規則ベースで箱を押す）")
+    parser = argparse.ArgumentParser(description="ROS 2 の協調のノード（規則ベース、または学習した方策で箱を押す）")
     parser.add_argument(
         "--config", type=Path, required=True,
         help="ROS 2 の実行系の設定（configs/ros2_team*.yaml 形式）。作業の設定はその team_config から読む",
     )  # fmt: skip
     parser.add_argument(
-        "--mode", choices=[mode.value for mode in CoordinationMode], required=True,
+        "--mode", choices=[*(mode.value for mode in CoordinationMode), LEARNED_MODE], required=True,
         help="cooperative: 相手の状態を使い、相手が位置を直す間は押し続ける（E5）。cooperative_wait: 相手が押すのを"
-        "やめたら止まって待つ。independent: 相手の状態を使わない（E3・E4）",
+        "やめたら止まって待つ。independent: 相手の状態を使わない（E3・E4）。learned: 学習した協調の方策で動かす",
     )  # fmt: skip
+    parser.add_argument(
+        "--policy-run-dir", type=Path, help="learned のとき必須。協調学習の出力先（outputs/team_marl/<run-name>）"
+    )
+    parser.add_argument("--policy-iteration", type=int, help="learned のとき必須。読み込むチェックポイントの更新の回数")
     parser.add_argument("--metrics-dir", type=Path, required=True, help="終了時に計測値を書くディレクトリ")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.mode == LEARNED_MODE and (args.policy_run_dir is None or args.policy_iteration is None):
+        parser.error("--mode learned には --policy-run-dir と --policy-iteration が必要")
+    return args
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -333,8 +401,8 @@ def main(argv: list[str] | None = None) -> None:
     raw_argv = sys.argv if argv is None else argv
     args = _parse_args(remove_ros_args(raw_argv)[1:])
     try:
-        run = load_team_run_settings(Path(load_ros2_team_settings(args.config).team_config))
-    except (FileNotFoundError, ConfigValidationError) as error:
+        configs = _load_configs(args)
+    except (FileNotFoundError, ConfigValidationError, PolicyConditionMismatchError) as error:
         logger.error("協調のノードの設定が不正: %s", error)
         sys.exit(EXIT_INVALID_INPUT)
     # 1 台分の小さな計算で、複数のスレッドを調整する手間の方が大きい
@@ -344,8 +412,8 @@ def main(argv: list[str] | None = None) -> None:
     rclpy.init(args=raw_argv, signal_handler_options=SignalHandlerOptions.NO)
     node = Node(NODE_NAME)
     try:
-        coord_node = TeamCoordNode(node, run, CoordinationMode(args.mode))
-    except (RobotNotInSceneError, CooperativeTeamSizeError) as error:
+        coord_node = TeamCoordNode(node, _make_setup(args, configs, node.get_namespace().strip("/")))
+    except (RobotNotInSceneError, CooperativeTeamSizeError, CheckpointNotFoundError, CheckpointLoadError) as error:
         logger.error("%s", error)
         node.destroy_node()
         rclpy.try_shutdown()

@@ -56,6 +56,7 @@ from cooperative_go2.interface_adapters.genesis_video_recorder import GenesisVid
 from cooperative_go2.interface_adapters.real_time_pacer import RealTimePacer
 from cooperative_go2.interface_adapters.ros2_metrics import RoundTripLatencyProbe, write_node_metrics
 from cooperative_go2.interface_adapters.ros2_sim_ports import PeerNodeRejectedError, PeerNodeTimeoutError
+from cooperative_go2.interface_adapters.ros2_team_deciders import LEARNED_MODE
 from cooperative_go2.interface_adapters.ros2_team_sim_ports import (
     RosTeamStatePublisher,
     RosTeamTaskPeers,
@@ -118,7 +119,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="ROS 2 のシミュレーションノード（通路の開通・1 台と 2 台）")
     parser.add_argument("--config", type=Path, required=True, help="ROS 2 の実行系の設定（configs/ros2_team*.yaml）")
     parser.add_argument(
-        "--mode", choices=[mode.value for mode in CoordinationMode], required=True,
+        "--mode", choices=[*(mode.value for mode in CoordinationMode), LEARNED_MODE], required=True,
         help="協調のノードのモード（記録の条件として残す。協調のノードにも同じ値を渡す）",
     )  # fmt: skip
     parser.add_argument("--seed", type=int, required=True, help="評価用の乱数シード（開始位置と初期姿勢）")
