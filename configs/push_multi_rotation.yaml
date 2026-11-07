@@ -1,0 +1,122 @@
+# 2 台の協調学習で、箱の回転の減点を強めた設定。configs/push_multi.yaml と、報酬の box_rotation の係数だけが違う
+# （違いが係数だけであることはユニットテストで確かめる）。
+# push_multi.yaml の MAPPO（ロボットごとに別々に学習）は、ROS 2 の評価で成功 32/32 だったが、試行ごとの箱の回転の最大が
+# 平均 36°（全体 89°）で、押し始めをそろえる規則ベースの協調（E5、17°）より大きかった。回転の減点（1 rad あたり -1.0）が、
+# 箱を押し出す報酬（箱の進捗 1 m あたり 10、成功 10）に比べて小さく、回しながら押し出す方策になったと考え、5 倍にして確かめる。
+# すべてのキーが必須。検証の内容は push_multi.yaml と同じ。
+
+scene_config: configs/scenes/s3_team.yaml
+
+# 固定して使う歩行方策（1 台の箱押し・規則ベースの協調と同じ）
+gait_policy:
+  run_dir: outputs/gait/gait-command-tracking
+  checkpoint: 1500
+
+task:
+  episode:
+    # 学習の並列環境の数。scripts/p5_marl_check/smoke_team_marl_env.py でランダムな指令で 150 ステップ動かすと、
+    # 512・1024・2048 環境で 1693・3042・4829 環境ステップ/秒だった。その間に nvidia-smi で 2 秒ごとに測った GPU のメモリ
+    # （画面の表示などを含む全体）の最大は 4.1・4.5・5.7 GB だった。
+    # 1 台の箱押しと同じ 1024 にし、1 回の更新（24 ステップ）を約 8 秒で集める
+    num_envs: 1024
+    # 規則ベースの協調の判断と同じ 10 Hz。歩行方策（50 Hz）を 5 回呼ぶ
+    high_level_period_s: 0.1
+    # 規則ベースの協調の作業全体の時間切れ（coordination.timeouts.task_s）と同じ
+    episode_length_s: 60.0
+    # 規則ベースの協調の転倒の判定（fall_tilt_deg）と同じ。歩行方策の学習時の終了条件（10°）より緩くしない
+    fall_roll_deg: 10.0
+    fall_pitch_deg: 10.0
+
+  # 1 台の箱押しの高レベル方策と同じ範囲。前進の上限は規則ベースの協調の押す指令（0.6 m/s）と同じ
+  commands:
+    vx_mps: {low: -0.3, high: 0.6}
+    vy_mps: {low: -0.3, high: 0.3}
+    yaw_rate_radps: {low: -1.0, high: 1.0}
+
+  # 規則ベースの協調（team.reset）と同じ。押す位置に着く時刻をロボットごとにずらす
+  reset:
+    start_back_m: {low: 0.0, high: 0.8}
+    start_lateral_jitter_m: 0.05
+
+  # シーンの robots と同じ順。go2_a は箱の左（+y）、go2_b は右から始める
+  agent_side_signs: [1.0, -1.0]
+
+  # 規則ベースの協調の VERIFY の時間（coordination.verify_hold_s）と同じ
+  success_hold_time_s: 1.0
+
+  # 壁はシーンの有効範囲の端（y = ±4 m）まで延びている。退避領域（x = 3.8 m）より先も少し含める
+  arena:
+    half_extent_x_m: 5.0
+    half_extent_y_m: 4.0
+
+  divergence:
+    # 歩行でも押す動作でも起こりえない速さ
+    max_speed_mps: 10.0
+
+  communication:
+    # ROS 2 で 2 台の協調を動かしたとき、判断の時点で最後に受け取っていた相手の状態の古さは平均 92〜95 ms・最大 140 ms
+    # だった（判断の周期 0.1 s）。1 周期前に相手が配信した状態が届くとみなす
+    delay_s: 0.1
+    # 欠落しても最後に届いた状態とその古さで判断できるように、学習では 1 割を落とす
+    drop_probability: 0.1
+    # 規則ベースの協調が相手の状態を途絶えたとみなす時間（0.5 s）の 2 倍まで古さを区別する
+    max_age_s: 1.0
+
+  # 1 台の箱押しの高レベル方策と同じ
+  observation:
+    position: 1.0
+    lin_vel: 2.0
+    ang_vel: 0.25
+
+  reward:
+    # 箱の後ろに 0.5 m 間隔で横に並んで押す位置（箱の中心から後ろへ 0.6 m・横へ 0.25 m、約 23°）を含む約 37° 以内
+    intended_face_min_cos: 0.8
+    # Go2 の胴体の幅（約 0.31 m）より少し広く、横に並んで押す間隔（0.5 m）より狭い
+    min_robot_separation_m: 0.35
+    # 近づく報酬の目標にする押す位置。規則ベースの協調の押す位置（team.push_control.standoff_m と
+    # team.push_lateral_offsets_m の大きさ）と同じ
+    push_standoff_m: 0.6
+    push_lateral_offset_m: 0.25
+    scales:
+      # 2 台で共有する項
+      box_progress: 10.0
+      success: 10.0
+      # push_multi.yaml の 5 倍。90° 回すと約 -7.9 で、成功の報酬（10）に近い大きさになる
+      box_rotation: -5.0
+      # ロボットごとの項。押す位置に近づく誘導は、1 m 近づけば 1 m 歩く指令の減点（約 0.07）を十分に上回る大きさにする。
+      # 無いと、箱から 0.15〜0.95 m 後ろに置いた開始位置から箱に届かないまま学習が進まなかった（100 回の更新の確認で、
+      # 箱との接触・箱の移動ともほぼ 0）
+      approach_progress: 2.0
+      # 接触の報酬は、押し切らずに箱に触れ続けるだけで箱を押し出す報酬を上回らないよう小さくする
+      intended_face_contact: 0.02
+      robot_fall: -10.0
+      # 転倒と同じくエピソードを終えるので同じ大きさにする。減点しないと、シーンの外へ歩いてエピソードを早く終える
+      # 行動が、毎ステップの小さな減点を避けられて得になった（20 回の更新の確認で、終わったエピソードの 9 割が離脱）
+      out_of_bounds: -10.0
+      robot_collision: -1.0
+      control_effort: -0.01
+
+# IPPO・MAPPO の設定。1 台の箱押しの高レベル方策（RSL-RL の PPO）とそろえる
+skrl:
+  rollouts: 24
+  learning_epochs: 5
+  mini_batches: 4
+  discount_factor: 0.99
+  gae_lambda: 0.95
+  learning_rate: 0.0005
+  desired_kl: 0.01
+  ratio_clip: 0.2
+  value_clip: 0.2
+  entropy_loss_scale: 0.005
+  value_loss_scale: 1.0
+  grad_norm_clip: 1.0
+  actor_hidden_dims: [256, 128, 64]
+  critic_hidden_dims: [256, 128, 64]
+  init_noise_std: 0.5
+  checkpoint_interval_updates: 50
+
+training:
+  # 学習用のシード。評価には別のシード（並列環境 5001、ROS 2 6001）を使う
+  seed: 21
+  # 更新（反復）の回数。速度を計測して決める
+  max_iterations: 1000

@@ -75,3 +75,15 @@ def test_same_side_for_both_robots_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigValidationError):
         load_team_marl_run_settings(path)
+
+
+def test_rotation_variant_differs_only_in_the_box_rotation_weight() -> None:
+    # 回転の減点を強めた学習の結果を、push_multi.yaml の学習と報酬の 1 項だけの違いとして比べるため
+    base = yaml.safe_load(PUSH_MULTI.read_text(encoding="utf-8"))
+    variant = yaml.safe_load((REPO_ROOT / "configs" / "push_multi_rotation.yaml").read_text(encoding="utf-8"))
+    base_weight = base["task"]["reward"]["scales"].pop("box_rotation")
+    variant_weight = variant["task"]["reward"]["scales"].pop("box_rotation")
+
+    assert variant == base
+    assert variant_weight < base_weight < 0
+    load_team_marl_run_settings(REPO_ROOT / "configs" / "push_multi_rotation.yaml")
