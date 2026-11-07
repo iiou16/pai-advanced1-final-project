@@ -5,6 +5,7 @@
 """
 
 import json
+import pickle
 from pathlib import Path
 
 import torch
@@ -21,6 +22,10 @@ TEAM_RUN_COMMIT_FILENAME = "git_commit.txt"
 CHECKPOINTS_DIRNAME = "checkpoints"
 
 
+class InvalidRunRecordError(ValueError):
+    """学習の出力先に残した記録（学習方式など）が、読める形式でないことを表す。"""
+
+
 def write_variant(run_dir: Path, variant: MarlVariant) -> None:
     """学習方式の記録を run_dir に書く。"""
     record = {"algorithm": variant.algorithm.value, "shared_parameters": variant.shared_parameters}
@@ -32,12 +37,20 @@ def load_variant(run_dir: Path) -> MarlVariant:
 
     Raises:
         FileNotFoundError: 記録が無い。
-        KeyError, ValueError: 記録の形式が違う。
+        InvalidRunRecordError: 記録が JSON として読めない、キーが足りない、または値が決めた形でない。
     """
-    record = json.loads((run_dir / TEAM_RUN_VARIANT_FILENAME).read_text(encoding="utf-8"))
-    return MarlVariant(
-        algorithm=MarlAlgorithm(record["algorithm"]), shared_parameters=bool(record["shared_parameters"])
-    )
+    path = run_dir / TEAM_RUN_VARIANT_FILENAME
+    text = path.read_text(encoding="utf-8")
+    try:
+        record = json.loads(text)
+        algorithm = MarlAlgorithm(record["algorithm"])
+        shared_parameters = record["shared_parameters"]
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        # JSON として読めない・キーが無い・辞書でない・学習方式の名前が無いものは、いずれも記録の形式の誤り
+        raise InvalidRunRecordError(f"学習方式の記録を読めない: {path}: {error}") from error
+    if not isinstance(shared_parameters, bool):
+        raise InvalidRunRecordError(f"{path}: shared_parameters は true か false: {shared_parameters!r}")
+    return MarlVariant(algorithm=algorithm, shared_parameters=shared_parameters)
 
 
 def load_team_run_settings_copy(run_dir: Path) -> TeamMarlTrainingSettings:
@@ -67,27 +80,28 @@ def load_team_policy(run_dir: Path, iteration: int, agent_name: str, device: tor
         device: Actor を置くデバイス。
 
     Raises:
-        FileNotFoundError: 設定の写しか学習方式の記録が無い。
+        FileNotFoundError: 設定の写しか、それが指すシーンの設定が無い。
         ConfigValidationError: 設定の写しが現在の設定の形式に合わない。
         CheckpointNotFoundError: チェックポイントが無い。
-        CheckpointLoadError: チェックポイントにそのロボットの Actor が無い、またはネットワークの構成が合わない。
+        CheckpointLoadError: チェックポイントを読み込めない、そのロボットの Actor が無い、またはネットワークの構成が
+            合わない。
     """
     settings = load_team_run_settings_copy(run_dir)
     path = team_checkpoint_path(run_dir, iteration, settings.skrl.rollouts)
     if not path.is_file():
         raise CheckpointNotFoundError(f"チェックポイントが無い: {path}")
-    checkpoint = torch.load(path, map_location=device, weights_only=False)
-    try:
-        state_dict = checkpoint[agent_name][POLICY_ROLE]
-    except KeyError as error:
-        raise CheckpointLoadError(f"{path} に {agent_name} の Actor が無い: {error}") from error
     # skrl のモデルは作った時点ではパラメータを device に置かない（学習ではエージェントが移す）ので、ここで移す
     policy = TeamPolicy(settings.skrl, device).to(device)
     try:
-        policy.load_state_dict(state_dict)
-    except RuntimeError as error:
-        raise CheckpointLoadError(
-            f"{path} の {agent_name} の Actor が設定のネットワークの構成と合わない: {error}"
-        ) from error
+        checkpoint = torch.load(path, map_location=device, weights_only=False)
+        policy.load_state_dict(checkpoint[agent_name][POLICY_ROLE])
+    except (torch.OutOfMemoryError, torch.AcceleratorError):
+        # メモリ不足と GPU の実行時エラーは RuntimeError の一種だが、チェックポイントの不良ではないのでそのまま伝える
+        raise
+    except (pickle.UnpicklingError, EOFError, KeyError, TypeError, RuntimeError) as error:
+        # 中身が壊れている（UnpicklingError）、空や途中で切れている（EOFError）、そのロボットの Actor が無いか別の構造
+        # （KeyError・TypeError）、ネットワークの構成が合わない（RuntimeError）は、いずれもこのチェックポイントを
+        # 使えない点で同じ扱いにする
+        raise CheckpointLoadError(f"{path} から {agent_name} の Actor を読み込めない: {error}") from error
     policy.eval()
     return policy

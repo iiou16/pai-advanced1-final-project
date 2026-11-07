@@ -108,6 +108,8 @@ class SkrlTeamTrainerFactory:
         """環境と学習器を作る。
 
         Raises:
+            FileNotFoundError: 歩行方策の設定の写し（gait.yaml）が無い。
+            ConfigValidationError: 歩行方策の設定の写しが現在の設定の形式に合わない。
             SimulationSetupError: シーンを構築できない、または Go2 のモデルが想定と異なる。
             InvalidPushConfigError: 協調学習の設定が歩行方策の学習時の設定と矛盾する。
             CheckpointNotFoundError, CheckpointLoadError: 歩行方策を読み込めない。

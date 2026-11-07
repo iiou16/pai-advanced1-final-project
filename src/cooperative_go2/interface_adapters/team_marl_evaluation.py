@@ -15,6 +15,7 @@ import torch
 from cooperative_go2.entities.push_termination import PushTerminationReason
 from cooperative_go2.interface_adapters.skrl_team import TeamPolicy
 from cooperative_go2.interface_adapters.team_marl_env import Go2TeamMarlEnv, TeamStepOutcome
+from cooperative_go2.use_cases.evaluate_push import EvaluationDidNotFinishError
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,10 @@ def evaluate_team_policies(env: Go2TeamMarlEnv, policies: tuple[TeamPolicy, ...]
     Args:
         env: 評価する並列環境。
         policies: ロボットごとの Actor（シーンの robots と同じ順）。
+
+    Raises:
+        EvaluationDidNotFinishError: エピソードの長さのステップ数を進めても、最初のエピソードが終わらない環境があった
+            （時間切れの判定の不具合）。
     """
     num_envs = env.num_envs
     period_s = env.cfg.episode.high_level_period_s
@@ -91,8 +96,11 @@ def evaluate_team_policies(env: Go2TeamMarlEnv, policies: tuple[TeamPolicy, ...]
         observations = outcome.observations
         _record_step(progress, outcome, retreat_xy, round(step * period_s, 6))
         if all(progress.finished):
-            break
-    return [_row(progress, env_index) for env_index in range(num_envs)]
+            return [_row(progress, env_index) for env_index in range(num_envs)]
+    unfinished = [env_index for env_index, finished in enumerate(progress.finished) if not finished]
+    raise EvaluationDidNotFinishError(
+        f"{env.max_episode_length} ステップを超えても試行が終わらない環境がある: {unfinished}"
+    )
 
 
 def _record_step(progress: _TrialProgress, outcome: TeamStepOutcome, retreat_xy: torch.Tensor, time_s: float) -> None:

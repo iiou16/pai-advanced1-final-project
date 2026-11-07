@@ -19,6 +19,7 @@ from pathlib import Path
 
 import genesis as gs
 
+from cooperative_go2.entities.config_validation import InvalidConfigError
 from cooperative_go2.entities.push_config import InvalidPushConfigError
 from cooperative_go2.frameworks.genesis_runtime import init_genesis_on_cpu, init_genesis_on_cuda, make_seeded_generator
 from cooperative_go2.frameworks.git_revision import GitCommitUnavailableError, current_commit_sha
@@ -33,12 +34,14 @@ from cooperative_go2.interface_adapters.genesis_corridor_scene import CorridorSc
 from cooperative_go2.interface_adapters.genesis_corridor_simulation import GenesisCorridorSimulation
 from cooperative_go2.interface_adapters.rsl_rl_policy import CheckpointLoadError, CheckpointNotFoundError
 from cooperative_go2.interface_adapters.skrl_team_policy import (
+    InvalidRunRecordError,
     load_team_policy,
     load_team_run_settings_copy,
     load_variant,
 )
 from cooperative_go2.interface_adapters.team_marl_env import Go2TeamMarlEnv, TeamMarlEnvSetup, TeamSizeError
 from cooperative_go2.interface_adapters.team_marl_evaluation import TeamMarlTrialRow, evaluate_team_policies
+from cooperative_go2.use_cases.evaluate_push import EvaluationDidNotFinishError
 from cooperative_go2.use_cases.simulation_errors import SimulationSetupError
 
 TRIALS_FILENAME = "trials.csv"
@@ -47,6 +50,7 @@ GENESIS_INITIALIZERS = {"cpu": init_genesis_on_cpu, "cuda": init_genesis_on_cuda
 EXIT_INVALID_INPUT = 2
 EXIT_OUTPUT_EXISTS = 3
 EXIT_SIMULATION_SETUP_FAILED = 4
+EXIT_EVALUATION_DID_NOT_FINISH = 5
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +107,14 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(EXIT_OUTPUT_EXISTS)
     try:
         settings = load_team_run_settings_copy(args.run_dir)
+    except (FileNotFoundError, ConfigValidationError) as error:
+        logger.error("入力が不正: %s", error)
+        sys.exit(EXIT_INVALID_INPUT)
+    # 学習と同じシードで評価すると、学習中に見た開始位置の並びで評価してしまうため止める
+    if args.seed == settings.training.seed:
+        logger.error("入力が不正: 評価のシード %d が学習のシードと同じ", args.seed)
+        sys.exit(EXIT_INVALID_INPUT)
+    try:
         variant = load_variant(args.run_dir)
         scene = load_corridor_scene_settings(Path(settings.scene_config))
         gait_run_dir = Path(settings.gait_policy.run_dir)
@@ -111,13 +123,10 @@ def main(argv: list[str] | None = None) -> None:
         episode = dataclasses.replace(settings.task.episode, num_envs=args.num_envs)
         task = dataclasses.replace(settings.task, episode=episode, communication=communication)
         commit_sha = current_commit_sha()
-    except (FileNotFoundError, ConfigValidationError, InvalidPushConfigError, KeyError, ValueError,
+    except (FileNotFoundError, ConfigValidationError, InvalidRunRecordError, InvalidConfigError,
             GitCommitUnavailableError) as error:  # fmt: skip
+        # InvalidConfigError は、--drop-probability を設定の値の範囲で検証したときの誤り
         logger.error("入力が不正: %s", error)
-        sys.exit(EXIT_INVALID_INPUT)
-    # 学習と同じシードで評価すると、学習中に見た開始位置の並びで評価してしまうため止める
-    if args.seed == settings.training.seed:
-        logger.error("入力が不正: 評価のシード %d が学習のシードと同じ", args.seed)
         sys.exit(EXIT_INVALID_INPUT)
 
     GENESIS_INITIALIZERS[args.device](args.seed)
@@ -139,6 +148,9 @@ def main(argv: list[str] | None = None) -> None:
     except SimulationSetupError as error:
         logger.error("%s", error)
         sys.exit(EXIT_SIMULATION_SETUP_FAILED)
+    except EvaluationDidNotFinishError as error:
+        logger.error("%s", error)
+        sys.exit(EXIT_EVALUATION_DID_NOT_FINISH)
 
     output_dir.mkdir(parents=True)
     with (output_dir / TRIALS_FILENAME).open("w", newline="") as file:

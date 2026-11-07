@@ -77,7 +77,9 @@ def main(argv: list[str] | None = None) -> None:
     except RunAlreadyExistsError as error:
         logger.error("%s", error)
         sys.exit(EXIT_RUN_ALREADY_EXISTS)
-    except (InvalidPushConfigError, TeamSizeError, CheckpointNotFoundError, CheckpointLoadError) as error:
+    except (FileNotFoundError, ConfigValidationError, InvalidPushConfigError, TeamSizeError, CheckpointNotFoundError,
+            CheckpointLoadError) as error:  # fmt: skip
+        # FileNotFoundError・ConfigValidationError は、学習器を作るときに読む歩行方策の設定の写しが無い・壊れているとき
         logger.error("入力が不正: %s%s", error, left_hint)
         sys.exit(EXIT_INVALID_INPUT)
     except SimulationSetupError as error:
