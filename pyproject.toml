@@ -14,6 +14,8 @@ dependencies = [
     # 学習・シーンの設定ファイル（configs/*.yaml）を読み込む
     "pyyaml",
     "rsl-rl-lib>=5.0.0,<6",
+    # 2 台の協調学習（IPPO・MAPPO）に使う。torch は上で固定した版を使うので、extra の [torch] は付けない
+    "skrl>=2.1.1,<3",
     "tensorboard",
     # RSL-RL の環境インターフェースが観測を TensorDict で受け渡す
     "tensordict",
