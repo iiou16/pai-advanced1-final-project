@@ -12,7 +12,7 @@ from typing import Protocol
 
 import torch
 
-from cooperative_go2.entities.command_expiry import ns_to_seconds
+from cooperative_go2.entities.command_expiry import ns_to_seconds, seconds_to_ns
 from cooperative_go2.entities.gait_termination import exceeds_tilt_limit
 from cooperative_go2.entities.partner_channel import PartnerMessage, PartnerReception
 from cooperative_go2.entities.push_observation import PlanarBodyState
@@ -128,10 +128,12 @@ class TeamPolicyDriver:
     - 観測は build_team_actor_observation で組み立てる。前回の指令には、範囲に切り詰めた後の指令を使う。
     - 相手の状態は、作業を始めた時刻以降で、判断の時刻より前に配信された最新のものを使う。古さは学習時と同じく
       max_age_s で頭打ちにし、使える状態が無ければ「届いていない」として観測に入れる。
-    - 終わりの判定は学習環境と同じ。箱の中心が退避領域に入ったと続けて required_hold_steps 回観測したら成功、
-      自分が転倒の傾きを超えた・自分か箱が有効範囲の外に出たら失敗、エピソードの長さの回数だけ判断したら時間切れ。
+    - 終わりの判定の条件は学習環境と同じ。箱の中心が退避領域に入ったと続けて required_hold_steps 回観測したら成功、
+      自分が転倒の傾きを超えた・自分か箱が有効範囲の外に出たら失敗、作業の始めからエピソードの長さが経ったら時間切れ。
       2 台の判定を合わせるのはタスク管理のノードの役目なので、相手の転倒はここでは判定しない。
-    前提: decide() を高レベル方策の周期（task.episode.high_level_period_s）の格子の時刻ごとに 1 回呼ぶ。
+      転倒の傾きは判断の時刻の状態で見る。学習環境は物理ステップごとに見るので一時的な傾きも数えるが、ROS 2 の
+      規則ベースの協調も判断の時刻で見るので、ROS 2 の比較の条件はそろう。
+    前提: decide() を高レベル方策の周期（task.episode.high_level_period_s）の格子の時刻ごとに呼ぶ。
     """
 
     def __init__(self, policy: TeamActorPolicy, task: TeamMarlTaskConfig, side_sign: float) -> None:
@@ -146,10 +148,13 @@ class TeamPolicyDriver:
         self._partner_reports: deque[PartnerReport] = deque(maxlen=_PARTNER_HISTORY)
         self._last_commands = torch.zeros((1, VELOCITY_COMMAND_SIZE))
         self._hold_steps = torch.zeros(1, dtype=torch.int64)
-        self._decisions = 0
+        self._period_ns = seconds_to_ns(task.episode.high_level_period_s)
 
     def start(self, retreat_xy_m: tuple[float, float], retreat_radius_m: float, start_ns: int) -> None:
-        """新しい作業を始める。前回の指令・退避領域に入っていた回数・判断の回数・受け取った相手の状態を捨てる。
+        """新しい作業を始める。前回の指令と、退避領域に入っていた回数を 0 に戻す。
+
+        受け取った相手の状態は捨てない。タスク管理は 2 台に順に依頼を送るので、先に始めた相手の最初の状態が、
+        自分の作業を始める前に届くことがあるため。前の作業の状態は、時刻が start_ns より前なので使われない。
 
         Args:
             retreat_xy_m: 退避領域の中心 (x, y) [m]（ワールド座標系）。
@@ -157,16 +162,12 @@ class TeamPolicyDriver:
             start_ns: 作業を始めた（依頼の）シミュレーション時刻 [ns]。これより前に配信された相手の状態は使わない。
         """
         self._active = _Task(torch.tensor([retreat_xy_m]), retreat_radius_m, start_ns)
-        self._partner_reports.clear()
         self._last_commands = torch.zeros((1, VELOCITY_COMMAND_SIZE))
         self._hold_steps = torch.zeros(1, dtype=torch.int64)
-        self._decisions = 0
 
     def observe_partner(self, report: PartnerReport) -> None:
-        """通信で受け取った相手の状態を覚える。作業を始める前に配信された状態は捨てる（前の試行の状態を使わない）。"""
-        active = self._active
-        if active is None or report.stamp_ns < active.start_ns:
-            return
+        """通信で受け取った相手の状態を覚える。どれを判断に使うかは decide() のときに、作業の始めの時刻以降で、
+        判断の時刻より前に配信されたものから選ぶ。"""
         self._partner_reports.append(report)
 
     def decide(self, inputs: TeamPolicyInputs) -> TeamPolicyDecision:
@@ -228,15 +229,17 @@ class TeamPolicyDriver:
 
     def _judge(self, inputs: TeamPolicyInputs, active: _Task) -> TeamTaskStatus:
         task = self._task
-        self._decisions += 1
         box_xy = inputs.box.position_xy_m
         in_retreat = is_in_goal_region(box_xy, active.retreat_xy_m, active.retreat_radius_m)
         self._hold_steps = advance_goal_hold_steps(self._hold_steps, in_retreat)
         episode = task.episode
         roll_pitch_yaw = torch.cat((inputs.robot_roll_pitch_deg, torch.zeros((1, 1))), dim=1)
         flags = PushTerminationFlags(
-            # 判断の回数 − 1 が、作業の始めから進めた周期の数（学習環境のエピソードのステップ数）になる
-            time_out=torch.tensor([self._decisions - 1 >= episode.max_episode_length_steps()]),
+            # 作業の始めから進んだ周期の数が、学習環境のエピソードのステップ数にあたる。状態を取りこぼして判断を
+            # 飛ばしても、時間切れの時刻はずれない
+            time_out=torch.tensor(
+                [(inputs.now_ns - active.start_ns) // self._period_ns >= episode.max_episode_length_steps()]
+            ),
             succeeded=has_held_goal(self._hold_steps, task.required_hold_steps()),
             fallen=exceeds_tilt_limit(roll_pitch_yaw, episode.fall_roll_deg, episode.fall_pitch_deg),
             out_of_bounds=is_outside_arena(inputs.robot.position_xy_m, task.arena)

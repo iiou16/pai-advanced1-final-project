@@ -329,7 +329,8 @@ def _load_configs(args: argparse.Namespace) -> _LoadedConfigs:
 
     Raises:
         FileNotFoundError, ConfigValidationError: 設定が無い・不正。
-        PolicyConditionMismatchError: 学習時のシーンか判断の周期が、ROS 2 の実行系の設定と違う。
+        PolicyConditionMismatchError: 学習時のシーンか判断の周期が ROS 2 の実行系の設定と違う、または学習時の通信の
+            遅れが 1 周期でない。
     """
     run = load_team_run_settings(Path(load_ros2_team_settings(args.config).team_config))
     if args.mode != LEARNED_MODE:
@@ -345,6 +346,10 @@ def _load_configs(args: argparse.Namespace) -> _LoadedConfigs:
         raise PolicyConditionMismatchError(
             f"学習時の判断の周期 {period_s} s が実行系の周期 {run.settings.team.high_level_period_s} s と違う"
         )
+    # 判断器は「判断の時刻より前の最新の相手の状態」を使うので、学習時の遅れが 1 周期のときにだけ学習時と同じ観測になる
+    delay_steps = policy.task.communication_delay_steps()
+    if delay_steps != 1:
+        raise PolicyConditionMismatchError(f"学習時の通信の遅れが 1 周期でない（{delay_steps} 周期）")
     return _LoadedConfigs(run=run, policy=policy)
 
 

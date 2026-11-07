@@ -209,3 +209,25 @@ def test_deciding_before_a_task_is_rejected(task: TeamMarlTaskConfig) -> None:
 
     with pytest.raises(NoActiveTaskError):
         driver.decide(_inputs(START_NS))
+
+
+def test_partner_status_received_before_the_task_starts_is_used(task: TeamMarlTaskConfig) -> None:
+    # タスク管理は 2 台に順に依頼を送るので、先に始めた相手の最初の状態が自分の作業の始めより先に届くことがある
+    driver = TeamPolicyDriver(RecordingPolicy(), task, side_sign=1.0)
+    driver.observe_partner(_report(START_NS, x_m=0.5))
+
+    driver.start(RETREAT_XY, RETREAT_RADIUS_M, START_NS)
+    decision = driver.decide(_inputs(START_NS + PERIOD_NS))
+
+    assert decision.partner_age_s == pytest.approx(0.1)
+
+
+def test_time_out_is_judged_from_the_elapsed_time_even_if_decisions_are_skipped(task: TeamMarlTaskConfig) -> None:
+    driver = _started(task, RecordingPolicy())
+    steps = task.episode.max_episode_length_steps()
+
+    before = driver.decide(_inputs(START_NS + (steps - 1) * PERIOD_NS))
+    after = driver.decide(_inputs(START_NS + steps * PERIOD_NS))
+
+    assert before.status is TeamTaskStatus.RUNNING
+    assert after.status is TeamTaskStatus.TIME_OUT

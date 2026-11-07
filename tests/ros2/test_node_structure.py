@@ -11,6 +11,7 @@ import pytest
 POLICY_NODE_MODULES = (
     "cooperative_go2.frameworks.ros2_gait_node",
     "cooperative_go2.frameworks.ros2_coord_node",
+    "cooperative_go2.frameworks.ros2_team_coord_node",
 )
 
 

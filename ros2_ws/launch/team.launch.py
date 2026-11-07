@@ -18,7 +18,7 @@
         run_name:=e5-video-seed6001-trials8-1 video:=true
 例（学習した協調の方策。チェックポイントは協調学習の出力先と更新の回数で選ぶ）:
     ros2 launch ros2_ws/launch/team.launch.py mode:=learned policy_run_dir:=outputs/team_marl/mappo-shared-seed21 \\
-        policy_iteration:=1000 seed:=6001 num_trials:=16 run_name:=e7-seed6001
+        policy_iteration:=1000 seed:=6001 num_trials:=16 run_name:=learned-mappo-shared-seed6001
 例（E3: 1 台）:
     ros2 launch ros2_ws/launch/team.launch.py config:=configs/ros2_team_single.yaml robots:=go2_a \\
         mode:=independent seed:=6001 num_trials:=16 run_name:=e3-seed6001
@@ -64,10 +64,12 @@ def _robot_nodes(context: LaunchContext) -> list[ExecuteProcess]:
     mode = LaunchConfiguration("mode").perform(context)
     policy_args = []
     if mode == LEARNED_MODE:
-        policy_args = [
-            "--policy-run-dir", LaunchConfiguration("policy_run_dir").perform(context),
-            "--policy-iteration", LaunchConfiguration("policy_iteration").perform(context),
-        ]  # fmt: skip
+        policy_run_dir = LaunchConfiguration("policy_run_dir").perform(context)
+        policy_iteration = LaunchConfiguration("policy_iteration").perform(context)
+        # 既定の空の値のまま渡すと、協調のノードが別の理由（カレントディレクトリに設定が無いなど）で止まり、原因が分かりにくい
+        if not policy_run_dir or not policy_iteration:
+            raise RuntimeError(f"mode:={LEARNED_MODE} には policy_run_dir と policy_iteration が必要")
+        policy_args = ["--policy-run-dir", policy_run_dir, "--policy-iteration", policy_iteration]
     nodes = []
     for robot in robots:
         namespace = ["-r", f"__ns:=/{robot}"]
