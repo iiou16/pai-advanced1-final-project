@@ -2,7 +2,7 @@
 
 行動はロボットごとの速度指令 [vx, vy, yaw_rate] で、高レベル方策の 1 ステップの間に、固定した歩行方策を
 ロボットごとに歩行の制御周期で複数回呼ぶ。観測・状態・報酬・終了判定・通信の模擬は entities の部品で計算し、
-物理はシミュレーションの操作（TeamSimulation）に任せる。学習ライブラリ（skrl）の形への変換は skrl_team_env が担う。
+物理はシミュレーションの操作（TeamSimulation）に任せる。学習ライブラリ（skrl）の形への変換は skrl_team の SkrlTeamEnv が担う。
 """
 
 from dataclasses import dataclass
@@ -41,7 +41,6 @@ from cooperative_go2.entities.team_task_config import sample_team_start_position
 from cooperative_go2.entities.velocity_command import VELOCITY_COMMAND_SIZE
 from cooperative_go2.use_cases.gait_controller import GaitController
 
-ROLL_AXIS, PITCH_AXIS = 0, 1
 TEAM_SIZE = 2
 
 
@@ -170,7 +169,8 @@ class Go2TeamMarlEnv:
     """2 台の Go2 が重い箱を通路の出口の先の退避領域へ押す、協調学習の並列環境。
 
     リセットでは、規則ベースの協調と同じ引き方でロボットの開始位置（押す位置の後ろへ散らす）と関節角の
-    ばらつきを引く。同じシード・デバイスで最初のリセットを行えば、P4 の並列環境の確認と同じ開始位置になる。
+    ばらつきを引く。同じシード・デバイスで最初のリセットを行えば、規則ベースの協調の並列環境での確認
+    （scripts/p4_coordination_check/run_team_push.py）と同じ開始位置になる。
     歩行方策の学習時に行動を 1 制御周期遅らせていた場合は、ここでも目標関節角を 1 制御周期遅らせて適用する。
     相手の状態は DelayedPartnerChannel を通して、設定の遅れと欠落つきで Actor の観測に入れる。
     """

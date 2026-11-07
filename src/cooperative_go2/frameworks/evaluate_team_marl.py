@@ -1,8 +1,8 @@
-"""学習した協調の方策を、ROS 2 を通さずに並列環境で評価する CLI（E6・E7）。
+"""学習した協調の方策（IPPO・MAPPO）を、ROS 2 を通さずに並列環境で評価する CLI。
 
-規則ベースの協調の並列環境での確認（scripts/p4_coordination_check/run_team_push.py）と同じシード・同じ並列環境の数で
-動かせば、同じ開始位置と関節角から始まり、同じ列の trials.csv を書く（押し始めの時刻だけ定義が違う。
-cooperative_go2.interface_adapters.team_marl_evaluation を参照）。
+規則ベースの協調の並列環境での確認（scripts/p4_coordination_check/run_team_push.py）と同じシード・同じ並列環境の数・
+同じデバイスで動かせば、同じ開始位置と関節角から始まる。trials.csv の列のうち、押し始めの時刻・失敗の理由・時間切れの
+時刻は規則ベースの確認と定義が違う（cooperative_go2.interface_adapters.team_marl_evaluation を参照）。
 
 例（source scripts/setup/env.sh したシェルで実行する）:
     uv run go2-evaluate-team-marl --run-dir outputs/team_marl/mappo-shared-seed21 --iteration 1000 \\

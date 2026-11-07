@@ -15,7 +15,7 @@ TEAM_RULE_BASED = REPO_ROOT / "configs" / "team_rule_based.yaml"
 
 
 def test_learning_and_rule_based_runs_share_the_comparison_conditions() -> None:
-    # E4〜E7 を同じ条件で比べるため、シーン・開始位置の散らし方・周期・転倒・時間切れ・成功の維持時間をそろえる
+    # 規則ベースの協調（E4・E5）と協調学習を同じ条件で比べるため、シーン・開始位置の散らし方・周期・転倒・時間切れ・成功の維持時間をそろえる
     marl = load_team_marl_run_settings(PUSH_MULTI)
     rule_based = load_team_run_settings(TEAM_RULE_BASED)
     task = marl.settings.task
