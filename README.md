@@ -249,7 +249,7 @@ uv run python scripts/p4_coordination_check/run_team_push.py --device cuda --con
 source scripts/setup/env.sh
 
 # 学習（出力: outputs/team_marl/<run-name>/。チェックポイント（50 回の更新ごと）・TensorBoard のログ・設定の写し・学習方式・コミット）。
-# 1024 環境・1000 回の更新で、RTX 2080 Ti で約 2 時間 50 分
+# 1024 環境・1000 回の更新で、RTX 2080 Ti で約 2 時間 45 分
 uv run go2-train-team-marl --config configs/push_multi.yaml --algorithm mappo --parameter-sharing separate \
     --run-name mappo-separate-seed21
 
@@ -282,10 +282,13 @@ uv run python scripts/p5_marl_check/compare_ros2_team_runs.py --output outputs/p
   | E7 MAPPO（共有） | 32/32 | 32/32 | 8.6 s | 10.9 s | 77° / 90° | — | 0 |
   | E7 MAPPO（別々） | 32/32 | 32/32 | 6.1 s | 8.2 s | 36° / 89° | — | 0 |
 
-  MAPPO は成功・開通・所要時間・転倒で規則ベースと IPPO を上回った。同じ共有の方式で比べると、集中 Critic で成功が 23 から 32 に増え、
-  転倒が 6 から 0 になった。劣ったのは箱の回転で、MAPPO（別々）の回転の最大は押し始めをそろえる E5 の約 2 倍。ただし回転したまま
-  でも全試行で通路を開けた。並列環境（シード 5001・32 試行）でも順位は同じ傾向（成功 E4 18・E5 20・IPPO 28・MAPPO 共有 28・
-  MAPPO 別々 32）。タスク管理の結果は全条件・全試行で真値の判定と一致した。
+  MAPPO は成功・開通・所要時間で規則ベースと IPPO を上回った。転倒は規則ベースと同じ 0（IPPO は 6）。同じ共有の方式で比べると、
+  ROS 2 では集中 Critic で成功が 23 から 32 に増え、転倒が 6 から 0 になった。劣ったのは箱の回転で、回転の最大の平均は
+  MAPPO（別々）36°・MAPPO（共有）77° で、押し始めをそろえる E5（17°）より大きい。ただし回転したままでも全試行で通路を開けた。
+  タスク管理の結果は全条件・全試行で真値の判定と一致した。
+- ROS 2 を通さない並列環境（シード 5001・32 試行・欠落なし）では、成功は E4 18・E5 20・IPPO（共有）28・MAPPO（共有）28・
+  MAPPO（別々）32、回転の最大の平均は 48°・17°・49°・74°・28°、転倒は 4・0・3・4・0。並列環境では IPPO と MAPPO（共有）の
+  成功は同じで、集中 Critic の効果は ROS 2 の評価ほどはっきりしない。
 - 学習した方策には段階が無いので、押し始めの時刻（PUSH に入った時刻）は記録しない。
 - どの方式も学習のシードは 1 つで、シード間のばらつきは測っていない。共有の方式は skrl がロボットごとに順に更新するので、
   共有と別々の差には更新の仕方の違いも含まれる。

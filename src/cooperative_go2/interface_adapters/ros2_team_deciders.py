@@ -144,7 +144,7 @@ class LearnedTeamDecider:
         self._driver = driver
 
     def start(self, retreat: RetreatArea, start_ns: int) -> None:
-        """前回の指令と受け取った相手の状態を捨てて、新しい作業を始める。"""
+        """前回の指令を捨てて新しい作業を始める。受け取った相手の状態は捨てず、判断では作業の始め以降のものだけを使う。"""
         self._driver.start(retreat.center_xy_m, retreat.radius_m, start_ns)
 
     def observe_partner(self, report: AgentStatusReport) -> None:

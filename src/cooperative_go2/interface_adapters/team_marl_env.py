@@ -183,7 +183,7 @@ class Go2TeamMarlEnv:
         Args:
             setup: 協調学習の環境の設定一式。
             simulation: setup.task.episode.num_envs 個の並列環境で構築した通路のシーンの操作。
-            controllers: ロボットごとの、setup.gait で学習した歩行方策の推論器（ロボットの数は num_envs）。
+            controllers: ロボットごとの、setup.gait で学習した歩行方策の推論器（各推論器が同時に推論する数は num_envs）。
 
         Raises:
             InvalidPushConfigError: 周期・指令の範囲・転倒の判定が歩行方策の学習時の設定と矛盾する。
