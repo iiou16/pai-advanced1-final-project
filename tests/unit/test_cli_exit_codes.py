@@ -111,6 +111,7 @@ def test_team_marl_evaluation_with_training_seed_exits_with_invalid_input(tmp_pa
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     shutil.copyfile(PUSH_MULTI_CONFIG, run_dir / "push_multi.yaml")
+    shutil.copyfile(REPO_ROOT / "configs" / "scenes" / "s3_team.yaml", run_dir / "scene.yaml")
     (run_dir / "variant.json").write_text('{"algorithm": "mappo", "shared_parameters": true}', encoding="utf-8")
     arguments = [
         "--run-dir", str(run_dir), "--iteration", "50", "--num-envs", "1", "--seed", "21",

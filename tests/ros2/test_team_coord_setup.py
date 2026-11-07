@@ -19,6 +19,7 @@ from cooperative_go2.use_cases.team_push_agent import RetreatArea
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ROS2_TEAM_CONFIG = REPO_ROOT / "configs" / "ros2_team.yaml"
 PUSH_MULTI = REPO_ROOT / "configs" / "push_multi.yaml"
+SCENE = REPO_ROOT / "configs" / "scenes" / "s3_team.yaml"
 PERIOD_NS = 100_000_000
 START_NS = 2_000_000_000
 RETREAT = RetreatArea(center_xy_m=(3.8, 0.0), radius_m=0.4)
@@ -36,6 +37,7 @@ def _policy_run_dir(tmp_path: Path, edit: dict[str, object]) -> Path:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     (run_dir / "push_multi.yaml").write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    shutil.copyfile(SCENE, run_dir / "scene.yaml")
     return run_dir
 
 
@@ -50,9 +52,11 @@ def _run_main(run_dir: Path, tmp_path: Path) -> int:
 
 
 def test_policy_trained_in_another_scene_is_rejected_before_starting_the_node(tmp_path: Path) -> None:
-    other_scene = tmp_path / "s3_team_copy.yaml"
-    shutil.copyfile(REPO_ROOT / "configs" / "scenes" / "s3_team.yaml", other_scene)
-    run_dir = _policy_run_dir(tmp_path, {"scene_config": str(other_scene)})
+    # 学習の出力先に残したシーンの中身が実行系のシーンと違えば、ファイルの場所が同じでも止める
+    run_dir = _policy_run_dir(tmp_path, {})
+    archived = yaml.safe_load((run_dir / "scene.yaml").read_text(encoding="utf-8"))
+    archived["box"]["mass_kg"] = 4.0
+    (run_dir / "scene.yaml").write_text(yaml.safe_dump(archived, allow_unicode=True), encoding="utf-8")
 
     assert _run_main(run_dir, tmp_path) == ros2_team_coord_node.EXIT_INVALID_INPUT
 

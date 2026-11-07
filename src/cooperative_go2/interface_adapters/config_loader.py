@@ -366,11 +366,34 @@ def load_team_marl_run_settings(path: Path) -> TeamMarlRunSettings:
             シーンのロボットの数と違う。
     """
     settings = _build_dataclass(TeamMarlTrainingSettings, _read_yaml(path), _ROOT_KEY_PATH)
-    scene = load_corridor_scene_settings(Path(settings.scene_config))
+    return _team_marl_run_settings(path, settings, Path(settings.scene_config))
+
+
+def load_team_marl_run_settings_with_scene(path: Path, scene_path: Path) -> TeamMarlRunSettings:
+    """2 台の協調学習の設定ファイルを、設定の scene_config ではなく scene_path のシーンの設定と組み合わせて読み込む。
+
+    学習の出力先に残した写し（設定とシーン）から読むのに使う。学習後に作業ツリーのシーンの設定が変わっても、
+    学習時のシーンで方策を評価・実行するため。
+
+    Args:
+        path: 協調学習の設定ファイル（configs/push_multi.yaml 形式）。
+        scene_path: 組み合わせるシーンの設定ファイル（configs/scenes/s3_team.yaml 形式）。
+
+    Raises:
+        FileNotFoundError: 協調学習またはシーンの設定ファイルが無い。
+        ConfigValidationError: YAML として読めない、キーの過不足・型・値が不正、または task.agent_side_signs の数が
+            シーンのロボットの数と違う。
+    """
+    settings = _build_dataclass(TeamMarlTrainingSettings, _read_yaml(path), _ROOT_KEY_PATH)
+    return _team_marl_run_settings(path, settings, scene_path)
+
+
+def _team_marl_run_settings(path: Path, settings: TeamMarlTrainingSettings, scene_path: Path) -> TeamMarlRunSettings:
+    scene = load_corridor_scene_settings(scene_path)
     num_robots = len(scene.scene.robots)
     if settings.task.num_agents != num_robots:
         raise ConfigValidationError(
-            f"{path}: task.agent_side_signs の数 {settings.task.num_agents} がシーン {settings.scene_config} の"
+            f"{path}: task.agent_side_signs の数 {settings.task.num_agents} がシーン {scene_path} の"
             f"ロボットの数 {num_robots} と違う"
         )
     return TeamMarlRunSettings(settings=settings, scene=scene)

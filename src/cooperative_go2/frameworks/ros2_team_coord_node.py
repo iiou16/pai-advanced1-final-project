@@ -335,11 +335,13 @@ def _load_configs(args: argparse.Namespace) -> _LoadedConfigs:
     run = load_team_run_settings(Path(load_ros2_team_settings(args.config).team_config))
     if args.mode != LEARNED_MODE:
         return _LoadedConfigs(run=run, policy=None)
-    policy = load_team_run_settings_copy(args.policy_run_dir)
-    # シミュレーションノードは ROS 2 の実行系の設定のシーンで物理を進めるので、学習時と同じシーン・周期でなければ比べられない
-    if policy.scene_config != run.settings.scene_config:
+    policy_run = load_team_run_settings_copy(args.policy_run_dir)
+    policy = policy_run.settings
+    # シミュレーションノードは ROS 2 の実行系の設定のシーンで物理を進めるので、学習時と同じシーン・周期でなければ比べられない。
+    # シーンはファイルの場所ではなく中身（配置・寸法・質量・摩擦・接触の設定）を、学習の出力先に残した写しと比べる
+    if policy_run.scene != run.scene:
         raise PolicyConditionMismatchError(
-            f"学習時のシーン {policy.scene_config} が実行系のシーン {run.settings.scene_config} と違う"
+            f"学習時のシーン（{args.policy_run_dir} の写し）が実行系のシーン {run.settings.scene_config} と違う"
         )
     period_s = policy.task.episode.high_level_period_s
     if period_s != run.settings.team.high_level_period_s:

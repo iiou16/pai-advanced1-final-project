@@ -10,7 +10,12 @@ from cooperative_go2.interface_adapters.config_loader import load_team_marl_run_
 from cooperative_go2.interface_adapters.rsl_rl_policy import CheckpointLoadError, CheckpointNotFoundError
 from cooperative_go2.interface_adapters.skrl_marl_config import MarlAlgorithm, MarlVariant
 from cooperative_go2.interface_adapters.skrl_team import SkrlTeamEnv, build_team_agent
-from cooperative_go2.interface_adapters.skrl_team_policy import InvalidRunRecordError, load_team_policy, load_variant
+from cooperative_go2.interface_adapters.skrl_team_policy import (
+    InvalidRunRecordError,
+    load_team_policy,
+    load_team_run_settings_copy,
+    load_variant,
+)
 from cooperative_go2.interface_adapters.skrl_team_training import (
     FileTeamMarlRunStore,
     SkrlTeamTrainer,
@@ -110,3 +115,16 @@ def test_truncated_checkpoint_is_reported_as_unloadable(
 
     with pytest.raises(CheckpointLoadError):
         load_team_policy(run_dir, iteration=1, agent_name="go2_a", device="cpu")
+
+
+def test_run_settings_are_read_with_the_archived_scene(small_config: Path, tmp_path: Path) -> None:
+    # 学習後に作業ツリーのシーンの設定が変わっても、学習の出力先に残したシーンで評価・実行する
+    run_dir = tmp_path / "run"
+    FileTeamMarlRunStore(run_dir, _record(small_config)).initialize()
+    archived = yaml.safe_load((run_dir / "scene.yaml").read_text(encoding="utf-8"))
+    archived["box"]["mass_kg"] = 4.0
+    (run_dir / "scene.yaml").write_text(yaml.safe_dump(archived, allow_unicode=True), encoding="utf-8")
+
+    run = load_team_run_settings_copy(run_dir)
+
+    assert run.scene.scene.box.mass_kg == pytest.approx(4.0)

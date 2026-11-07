@@ -10,7 +10,7 @@ from pathlib import Path
 
 import torch
 
-from cooperative_go2.interface_adapters.config_loader import TeamMarlTrainingSettings, load_team_marl_run_settings
+from cooperative_go2.interface_adapters.config_loader import TeamMarlRunSettings, load_team_marl_run_settings_with_scene
 from cooperative_go2.interface_adapters.rsl_rl_policy import CheckpointLoadError, CheckpointNotFoundError
 from cooperative_go2.interface_adapters.skrl_marl_config import MarlAlgorithm, MarlVariant
 from cooperative_go2.interface_adapters.skrl_team import POLICY_ROLE, TeamPolicy
@@ -53,16 +53,19 @@ def load_variant(run_dir: Path) -> MarlVariant:
     return MarlVariant(algorithm=algorithm, shared_parameters=shared_parameters)
 
 
-def load_team_run_settings_copy(run_dir: Path) -> TeamMarlTrainingSettings:
-    """学習の出力先に残した設定の写しを読む。
+def load_team_run_settings_copy(run_dir: Path) -> TeamMarlRunSettings:
+    """学習の出力先に残した設定とシーンの写しを読む。
 
-    写しが指すシーンの設定（scene_config）は現在の作業ディレクトリ起点で読む（学習時と同じ場所で実行する前提）。
+    作業ツリーのシーンの設定（写しの scene_config が指すファイル）は読まない。学習後にシーンの設定が変わっても、
+    学習時のシーンで方策を評価・実行するため。
 
     Raises:
-        FileNotFoundError: 写しかシーンの設定が無い。
+        FileNotFoundError: 設定かシーンの写しが無い。
         ConfigValidationError: 写しが現在の設定の形式に合わない。
     """
-    return load_team_marl_run_settings(run_dir / TEAM_RUN_CONFIG_FILENAME).settings
+    return load_team_marl_run_settings_with_scene(
+        run_dir / TEAM_RUN_CONFIG_FILENAME, run_dir / TEAM_RUN_SCENE_CONFIG_FILENAME
+    )
 
 
 def team_checkpoint_path(run_dir: Path, iteration: int, rollouts: int) -> Path:
@@ -80,13 +83,13 @@ def load_team_policy(run_dir: Path, iteration: int, agent_name: str, device: tor
         device: Actor を置くデバイス。
 
     Raises:
-        FileNotFoundError: 設定の写しか、それが指すシーンの設定が無い。
-        ConfigValidationError: 設定の写しが現在の設定の形式に合わない。
+        FileNotFoundError: 設定かシーンの写しが無い。
+        ConfigValidationError: 写しが現在の設定の形式に合わない。
         CheckpointNotFoundError: チェックポイントが無い。
         CheckpointLoadError: チェックポイントを読み込めない、そのロボットの Actor が無い、またはネットワークの構成が
             合わない。
     """
-    settings = load_team_run_settings_copy(run_dir)
+    settings = load_team_run_settings_copy(run_dir).settings
     path = team_checkpoint_path(run_dir, iteration, settings.skrl.rollouts)
     if not path.is_file():
         raise CheckpointNotFoundError(f"チェックポイントが無い: {path}")

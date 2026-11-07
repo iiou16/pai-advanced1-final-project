@@ -23,11 +23,7 @@ from cooperative_go2.entities.config_validation import InvalidConfigError
 from cooperative_go2.entities.push_config import InvalidPushConfigError
 from cooperative_go2.frameworks.genesis_runtime import init_genesis_on_cpu, init_genesis_on_cuda, make_seeded_generator
 from cooperative_go2.frameworks.git_revision import GitCommitUnavailableError, current_commit_sha
-from cooperative_go2.interface_adapters.config_loader import (
-    ConfigValidationError,
-    load_corridor_scene_settings,
-    load_gait_settings,
-)
+from cooperative_go2.interface_adapters.config_loader import ConfigValidationError, load_gait_settings
 from cooperative_go2.interface_adapters.gait_checkpoint import load_gait_controller
 from cooperative_go2.interface_adapters.gait_run_store import RUN_CONFIG_FILENAME
 from cooperative_go2.interface_adapters.genesis_corridor_scene import CorridorSceneRequest
@@ -106,17 +102,19 @@ def main(argv: list[str] | None = None) -> None:
         logger.error("出力先が既にある（上書きしない）: %s", output_dir)
         sys.exit(EXIT_OUTPUT_EXISTS)
     try:
-        settings = load_team_run_settings_copy(args.run_dir)
+        run = load_team_run_settings_copy(args.run_dir)
     except (FileNotFoundError, ConfigValidationError) as error:
         logger.error("入力が不正: %s", error)
         sys.exit(EXIT_INVALID_INPUT)
+    settings = run.settings
     # 学習と同じシードで評価すると、学習中に見た開始位置の並びで評価してしまうため止める
     if args.seed == settings.training.seed:
         logger.error("入力が不正: 評価のシード %d が学習のシードと同じ", args.seed)
         sys.exit(EXIT_INVALID_INPUT)
     try:
         variant = load_variant(args.run_dir)
-        scene = load_corridor_scene_settings(Path(settings.scene_config))
+        # 学習の出力先に残したシーンの写しで評価する（作業ツリーのシーンの設定が学習後に変わっても学習時と同じにする）
+        scene = run.scene
         gait_run_dir = Path(settings.gait_policy.run_dir)
         gait = load_gait_settings(gait_run_dir / RUN_CONFIG_FILENAME).gait
         communication = dataclasses.replace(settings.task.communication, drop_probability=args.drop_probability)
