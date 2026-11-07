@@ -249,7 +249,7 @@ def test_team_policy_observation_matches_training_observation(robot_truth: Rigid
     )
     expected = build_team_actor_observation(training_inputs, team_task.observation, max_age_s)
     policy = LinearPolicy(TEAM_ACTOR_OBSERVATION_DIM, 3)
-    decider = LearnedTeamDecider(TeamPolicyDriver(policy, team_task, side_sign=1.0))
+    decider = LearnedTeamDecider(TeamPolicyDriver(policy, team_task, robot_index=0))
     decider.start(RetreatArea(center_xy_m=GOAL_XY, radius_m=0.4), start_ns)
     decider.observe_partner(read_agent_status(make_agent_status(partner_report, "map")))
 

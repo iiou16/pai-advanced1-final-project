@@ -97,7 +97,7 @@ def _pose(x_m: float, y_m: float, roll_rad: float = 0.0) -> RigidBodyPose:
 @pytest.fixture
 def decider() -> LearnedTeamDecider:
     task = load_team_marl_run_settings(PUSH_MULTI).settings.task
-    learned = LearnedTeamDecider(TeamPolicyDriver(lambda observation: torch.zeros(1, 3), task, side_sign=1.0))
+    learned = LearnedTeamDecider(TeamPolicyDriver(lambda observation: torch.zeros(1, 3), task, robot_index=0))
     learned.start(RETREAT, START_NS)
     return learned
 

@@ -136,11 +136,19 @@ class TeamPolicyDriver:
     前提: decide() を高レベル方策の周期（task.episode.high_level_period_s）の格子の時刻ごとに呼ぶ。
     """
 
-    def __init__(self, policy: TeamActorPolicy, task: TeamMarlTaskConfig, side_sign: float) -> None:
-        """学習済みの Actor、その Actor を学習したときの環境の設定、自分の側（左 1.0・右 -1.0）を受け取る。"""
+    def __init__(self, policy: TeamActorPolicy, task: TeamMarlTaskConfig, robot_index: int) -> None:
+        """学習済みの Actor、その Actor を学習したときの環境の設定、シーンの robots の中での自分の番号を受け取る。
+
+        自分の側（観測に入れる左右）は、学習時と同じく task.agent_side_signs[robot_index] から決める。
+
+        Raises:
+            IndexError: robot_index に対応する側が task.agent_side_signs に無い。
+        """
+        if not 0 <= robot_index < task.num_agents:
+            raise IndexError(f"robot_index {robot_index} はロボット {task.num_agents} 台の番号の外")
         self._policy = policy
         self._task = task
-        self._side_sign = side_sign
+        self._side_sign = task.agent_side_signs[robot_index]
         limits = task.commands.as_ranges()
         self._command_low = torch.tensor([[limit.low for limit in limits]])
         self._command_high = torch.tensor([[limit.high for limit in limits]])

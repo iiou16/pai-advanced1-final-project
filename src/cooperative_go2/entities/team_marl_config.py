@@ -25,6 +25,8 @@ class InvalidTeamMarlConfigError(InvalidConfigError):
 _check = ConfigValueChecker(InvalidTeamMarlConfigError)
 # 自分の側の符号。押す方向の左が +1、右が -1
 _SIDE_SIGNS = frozenset({1.0, -1.0})
+# 協調学習のロボットの数
+TEAM_MARL_NUM_AGENTS = 2
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,11 @@ class TeamMarlTaskConfig:
     reward: TeamMarlRewardConfig
 
     def __post_init__(self) -> None:
+        # 協調学習の環境・観測は相手が 1 台だけの前提で作っている（相手の状態の通信・Critic の状態の並び）
+        if len(self.agent_side_signs) != TEAM_MARL_NUM_AGENTS:
+            raise InvalidTeamMarlConfigError(
+                f"agent_side_signs はロボット {TEAM_MARL_NUM_AGENTS} 台分にする: {self.agent_side_signs}"
+            )
         for index, sign in enumerate(self.agent_side_signs):
             if sign not in _SIDE_SIGNS:
                 raise InvalidTeamMarlConfigError(f"agent_side_signs[{index}] は 1 か -1 にする: {sign}")

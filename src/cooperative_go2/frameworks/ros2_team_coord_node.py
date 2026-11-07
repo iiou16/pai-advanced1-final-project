@@ -376,7 +376,7 @@ def _make_setup(args: argparse.Namespace, configs: _LoadedConfigs, robot_name: s
         decider: TeamDecider = RuleBasedTeamDecider(team, index, CoordinationMode(args.mode))
         return TeamCoordSetup(decider, names, team.high_level_period_s, uses_partner)
     actor = load_team_policy(args.policy_run_dir, args.policy_iteration, robot_name, CPU)
-    driver = TeamPolicyDriver(actor.mean_commands, policy.task, policy.task.agent_side_signs[index])
+    driver = TeamPolicyDriver(actor.mean_commands, policy.task, robot_index=index)
     return TeamCoordSetup(LearnedTeamDecider(driver), names, policy.task.episode.high_level_period_s, uses_partner)
 
 

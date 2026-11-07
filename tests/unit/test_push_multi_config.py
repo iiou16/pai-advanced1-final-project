@@ -42,7 +42,7 @@ def test_learning_and_rule_based_runs_share_the_comparison_conditions() -> None:
     assert task.communication.delay_s == team.high_level_period_s
 
 
-def test_agent_side_signs_must_match_the_scene_robots(tmp_path: Path) -> None:
+def test_agent_side_signs_must_be_for_two_robots(tmp_path: Path) -> None:
     data = yaml.safe_load(PUSH_MULTI.read_text(encoding="utf-8"))
     data["task"]["agent_side_signs"] = [1.0]
     path = tmp_path / "push_multi.yaml"

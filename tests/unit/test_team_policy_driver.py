@@ -79,7 +79,7 @@ def _report(stamp_ns: int, x_m: float) -> PartnerReport:
 
 
 def _started(task: TeamMarlTaskConfig, policy: RecordingPolicy) -> TeamPolicyDriver:
-    driver = TeamPolicyDriver(policy, task, side_sign=1.0)
+    driver = TeamPolicyDriver(policy, task, robot_index=0)
     driver.start(RETREAT_XY, RETREAT_RADIUS_M, START_NS)
     return driver
 
@@ -96,7 +96,7 @@ def test_observation_matches_the_training_env_for_the_same_state(make_team_marl_
     reset_observation = env.observations[0][0:1].clone()
     env.step((torch.zeros(2, 3), torch.zeros(2, 3)))
     policy = RecordingPolicy()
-    driver = TeamPolicyDriver(policy, env.cfg, side_sign=env.cfg.agent_side_signs[0])
+    driver = TeamPolicyDriver(policy, env.cfg, robot_index=0)
     driver.start(RETREAT_XY, RETREAT_RADIUS_M, START_NS)
     gravity = torch.tensor([[0.0, 0.0, -1.0]])
     no_tilt = torch.zeros(1, 2)
@@ -205,7 +205,7 @@ def test_time_out_after_the_episode_length(task: TeamMarlTaskConfig) -> None:
 
 
 def test_deciding_before_a_task_is_rejected(task: TeamMarlTaskConfig) -> None:
-    driver = TeamPolicyDriver(RecordingPolicy(), task, side_sign=1.0)
+    driver = TeamPolicyDriver(RecordingPolicy(), task, robot_index=0)
 
     with pytest.raises(NoActiveTaskError):
         driver.decide(_inputs(START_NS))
@@ -213,7 +213,7 @@ def test_deciding_before_a_task_is_rejected(task: TeamMarlTaskConfig) -> None:
 
 def test_partner_status_received_before_the_task_starts_is_used(task: TeamMarlTaskConfig) -> None:
     # タスク管理は 2 台に順に依頼を送るので、先に始めた相手の最初の状態が自分の作業の始めより先に届くことがある
-    driver = TeamPolicyDriver(RecordingPolicy(), task, side_sign=1.0)
+    driver = TeamPolicyDriver(RecordingPolicy(), task, robot_index=0)
     driver.observe_partner(_report(START_NS, x_m=0.5))
 
     driver.start(RETREAT_XY, RETREAT_RADIUS_M, START_NS)
@@ -231,3 +231,8 @@ def test_time_out_is_judged_from_the_elapsed_time_even_if_decisions_are_skipped(
 
     assert before.status is TeamTaskStatus.RUNNING
     assert after.status is TeamTaskStatus.TIME_OUT
+
+
+def test_robot_index_outside_the_team_is_rejected(task: TeamMarlTaskConfig) -> None:
+    with pytest.raises(IndexError):
+        TeamPolicyDriver(RecordingPolicy(), task, robot_index=2)
