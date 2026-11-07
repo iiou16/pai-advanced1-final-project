@@ -29,6 +29,9 @@ def test_learning_and_rule_based_runs_share_the_comparison_conditions() -> None:
     assert task.episode.fall_pitch_deg == team.fall_tilt_deg
     assert task.episode.episode_length_s == team.coordination.timeouts.task_s
     assert task.success_hold_time_s == team.coordination.verify_hold_s
+    # 規則ベースの VERIFY は、入ったと観測した時刻から verify_hold_s たった観測で DONE になる（入っている観測は 11 回）
+    verify_observations = round(team.coordination.verify_hold_s / team.high_level_period_s) + 1
+    assert task.required_hold_steps() == verify_observations
     assert task.commands.vx_mps.high == team.push_control.push_speed_mps
     # 近づく報酬の目標の押す位置は、規則ベースの協調の押す位置と同じ
     assert task.reward.push_standoff_m == team.push_control.standoff_m

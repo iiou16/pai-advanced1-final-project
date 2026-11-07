@@ -163,8 +163,13 @@ class TeamMarlTaskConfig:
         return len(self.agent_side_signs)
 
     def required_hold_steps(self) -> int:
-        """成功判定に必要な、退避領域に入った状態を続ける高レベル方策のステップ数を返す。"""
-        return ceil_ratio(self.success_hold_time_s, self.episode.high_level_period_s)
+        """成功判定に必要な、箱の中心が退避領域に入っていると続けて観測する高レベル方策のステップ数を返す。
+
+        規則ベースの協調の VERIFY と同じ数え方にする。VERIFY は入ったと観測した時刻に始まり、そこから
+        success_hold_time_s たった時刻の観測まで入ったままなら DONE になるので、入っている観測は
+        success_hold_time_s / 周期 より 1 回多い（1.0 s・0.1 s なら 11 回）。
+        """
+        return ceil_ratio(self.success_hold_time_s, self.episode.high_level_period_s) + 1
 
     def communication_delay_steps(self) -> int:
         """相手の状態が届くまでの遅れを、高レベル方策のステップ数で返す。"""

@@ -36,8 +36,8 @@ def test_box_held_in_the_retreat_area_is_a_success_and_others_time_out(
     assert [row.success for row in rows] == [False, True]
     assert rows[0].termination_reason == "TIME_OUT"
     assert rows[0].end_time_s == pytest.approx(env.cfg.episode.episode_length_s)
-    # 3 ステップ目に入り、10 ステップ（1 s）続いた 12 ステップ目に成功する
-    assert rows[1].end_time_s == pytest.approx(1.2)
+    # 3 ステップ目に入ったと観測し、そこから 1 s たった 13 ステップ目の観測まで入ったままなので成功する
+    assert rows[1].end_time_s == pytest.approx(1.3)
     assert rows[1].corridor_opened and not rows[0].corridor_opened
     assert rows[1].box_dx_m == pytest.approx(2.4, abs=1e-5)
 
