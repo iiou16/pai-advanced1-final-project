@@ -51,6 +51,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.steps <= WARMUP_STEPS:
+        raise ValueError(f"--steps は速さを測るために {WARMUP_STEPS} より大きくする: {args.steps}")
     run = load_team_marl_run_settings(CONFIG_PATH)
     settings = run.settings
     gait_run_dir = Path(settings.gait_policy.run_dir)
@@ -96,7 +98,7 @@ def main() -> None:
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     elapsed_s = time.perf_counter() - start
-    measured_steps = max(args.steps - WARMUP_STEPS, 1)
+    measured_steps = args.steps - WARMUP_STEPS
     steps_per_s = measured_steps * args.num_envs / elapsed_s
     print(f"並列環境 {args.num_envs}、{args.steps} ステップ: 例外なし。終了理由 {dict(reasons)}")
     print(

@@ -6,7 +6,7 @@ JSON を書く。ROS 2 の実行系は物理を方策の応答を待たずに進
 
 実行例:
     uv run python scripts/p5_marl_check/compare_ros2_team_runs.py --output outputs/p5_marl_check/comparison_ros2.json \\
-        --method "E5 規則ベースの協調=e5-p5-seed6001,e5-p5-seed6001-rerun" \\
+        --method "E5 規則ベースの協調=e5-seed6001,e5-seed6001-rerun" \\
         --method "MAPPO・別々=learned-mappo-separate-seed6001,learned-mappo-separate-seed6001-rerun"
 """
 
@@ -20,6 +20,7 @@ EVAL_ROOT = Path("outputs/ros2_team_eval")
 TRIALS_FILENAME = "trials.csv"
 SUMMARY_FILENAME = "summary.json"
 TRUE_TEXT = "True"
+FALSE_TEXT = "False"
 
 
 class ComparisonInputError(ValueError):
@@ -44,6 +45,7 @@ class MethodSummary:
         mean_box_max_abs_yaw_deg: 試行ごとの箱の回転の最大の平均 [deg]。
         max_box_max_abs_yaw_deg: 全試行の中の箱の回転の最大 [deg]。
         mean_push_start_spread_s: 2 台が押し始めた時刻の差の平均 [s]。押し始めを記録しない方式（学習した方策）は None。
+            1 台では差が無いので 0.0 になる。
         falls: 転倒したロボットの数の合計。
     """
 
@@ -76,6 +78,14 @@ def _read_rows(run: str) -> list[dict[str, str]]:
     return rows
 
 
+def _flag(row: dict[str, str], column: str) -> bool:
+    # 真偽値の列は "True" か "False" のどちらか。それ以外を False と数えると、書式が変わったときに成功の数が黙って 0 になる
+    value = row[column]
+    if value not in (TRUE_TEXT, FALSE_TEXT):
+        raise ComparisonInputError(f"{column} の値が True でも False でもない: {value!r}")
+    return value == TRUE_TEXT
+
+
 def _commit(run: str) -> str:
     summary = json.loads((EVAL_ROOT / run / SUMMARY_FILENAME).read_text(encoding="utf-8"))
     return str(summary["conditions"]["commit_sha"])
@@ -86,7 +96,7 @@ def summarize_method(method: str, runs: tuple[str, ...]) -> MethodSummary:
 
     Raises:
         FileNotFoundError: 実行の trials.csv か summary.json が無い。
-        ComparisonInputError: 試行が無い。
+        ComparisonInputError: 試行が無い、または真偽値の列の値が True・False 以外。
     """
     rows = [row for run in runs for row in _read_rows(run)]
     yaws = [float(row["box_max_abs_yaw_deg"]) for row in rows]
@@ -95,9 +105,9 @@ def summarize_method(method: str, runs: tuple[str, ...]) -> MethodSummary:
         runs=runs,
         commits=tuple(_commit(run) for run in runs),
         trials=len(rows),
-        successes=sum(row["success"] == TRUE_TEXT for row in rows),
-        task_successes=sum(row["task_success"] == TRUE_TEXT for row in rows),
-        corridor_opened=sum(row["corridor_opened"] == TRUE_TEXT for row in rows),
+        successes=sum(_flag(row, "success") for row in rows),
+        task_successes=sum(_flag(row, "task_success") for row in rows),
+        corridor_opened=sum(_flag(row, "corridor_opened") for row in rows),
         mean_open_time_s=_mean_or_none([float(row["open_time_s"]) for row in rows if row["open_time_s"]]),
         mean_success_time_s=_mean_or_none([float(row["success_time_s"]) for row in rows if row["success_time_s"]]),
         mean_box_dx_m=sum(float(row["box_dx_m"]) for row in rows) / len(rows),
@@ -131,8 +141,9 @@ def to_markdown(summaries: list[MethodSummary]) -> str:
 
 def _parse_method(text: str) -> tuple[str, tuple[str, ...]]:
     name, separator, runs = text.partition("=")
-    run_names = tuple(run for run in runs.split(",") if run)
-    if not separator or not name or not run_names:
+    run_names = tuple(runs.split(","))
+    # 空の実行の名前（"a,,b" や末尾のカンマ）は打ち間違いなので、黙って捨てずに止める
+    if not separator or not name or any(not run for run in run_names):
         raise ComparisonInputError(f"--method は 名前=実行,実行 の形で書く: {text!r}")
     return name, run_names
 
