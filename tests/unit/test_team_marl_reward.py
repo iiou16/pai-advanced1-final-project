@@ -3,7 +3,11 @@ import dataclasses
 import pytest
 import torch
 
-from cooperative_go2.entities.team_marl_config import TeamMarlRewardConfig, TeamMarlRewardScales
+from cooperative_go2.entities.team_marl_config import (
+    InvalidTeamMarlConfigError,
+    TeamMarlRewardConfig,
+    TeamMarlRewardScales,
+)
 from cooperative_go2.entities.team_marl_reward import (
     TeamMarlRewardInputs,
     compute_team_marl_reward_terms,
@@ -104,3 +108,24 @@ def test_zeroed_where_clears_every_term_for_masked_envs(inputs: TeamMarlRewardIn
     totals = terms.per_robot_total()
     assert totals[:, 0].tolist() == [0.0, 0.0]
     assert totals[:, 1].abs().sum() > 0
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"intended_face_min_cos": 1.5},
+        {"min_robot_separation_m": 0.0},
+        {"push_standoff_m": 0.0},
+        {"push_lateral_offset_m": -0.1},
+    ],
+    ids=["face-cos-out-of-range", "zero-separation", "zero-standoff", "negative-lateral-offset"],
+)
+def test_invalid_reward_config_is_rejected(changes: dict[str, object]) -> None:
+    with pytest.raises(InvalidTeamMarlConfigError):
+        dataclasses.replace(CONFIG, **changes)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf")], ids=["nan", "inf"])
+def test_non_finite_reward_scale_is_rejected(value: float) -> None:
+    with pytest.raises(InvalidTeamMarlConfigError):
+        dataclasses.replace(SCALES, box_progress=value)

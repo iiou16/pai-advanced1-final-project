@@ -1,4 +1,5 @@
 import dataclasses
+import math
 
 import pytest
 import torch
@@ -59,3 +60,34 @@ def test_first_box_contact_time_is_recorded_per_robot(
 
     assert rows[0].first_box_contact_times_s == "0.2|-"
     assert rows[0].first_box_contact_spread_s is None
+
+
+def test_rotation_falls_and_contact_spread_are_recorded(
+    make_team_marl_env: TeamMarlEnvFactory, policies: tuple[TeamPolicy, ...]
+) -> None:
+    env, simulation = make_team_marl_env()
+    gait_steps = env.gait_steps_per_high_level_step
+    physics_steps = {"count": 0}
+
+    def scripted_episode() -> None:
+        physics_steps["count"] += 1
+        count = physics_steps["count"]
+        if count == gait_steps * 2:
+            # 箱を押す方向（+x）から 170° 回す。箱は 180° 回しても同じ形なので、回転は 10° と数える
+            simulation.box = dataclasses.replace(simulation.box, yaw_rad=torch.full((TEAM_NUM_ENVS,), math.pi - 0.17))
+            simulation.contacts = (torch.ones(TEAM_NUM_ENVS, dtype=torch.bool), simulation.contacts[1])
+        if count == gait_steps * 3:
+            simulation.contacts = (simulation.contacts[0], torch.ones(TEAM_NUM_ENVS, dtype=torch.bool))
+        if count == gait_steps * 4:
+            simulation.euler_deg[1] = torch.tensor([[20.0, 0.0, 0.0]] * TEAM_NUM_ENVS)
+
+    simulation.step_hook = scripted_episode
+
+    rows = evaluate_team_policies(env, policies)
+
+    row = rows[0]
+    assert row.termination_reason == "FALL"
+    assert row.falls == 1
+    assert row.box_max_abs_yaw_deg == pytest.approx(math.degrees(0.17), abs=0.1)
+    assert row.first_box_contact_times_s == "0.2|0.3"
+    assert row.first_box_contact_spread_s == pytest.approx(0.1)
