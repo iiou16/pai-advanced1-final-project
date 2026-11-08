@@ -177,6 +177,7 @@ def _conditions() -> PushEvaluationConditions:
         high_level_period_s=HIGH_LEVEL_PERIOD_S,
         gait_steps_per_high_level_step=5,
         num_envs=1,
+        robustness_condition=None,
     )
 
 

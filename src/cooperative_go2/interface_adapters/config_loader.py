@@ -17,6 +17,7 @@ from cooperative_go2.entities.corridor_scene_config import CorridorSceneConfig
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_evaluation import GaitEvaluationSuite, InvalidEvaluationScenarioError
 from cooperative_go2.entities.push_config import RuleBasedPushConfig
+from cooperative_go2.entities.push_robustness import PushRobustnessSuite
 from cooperative_go2.entities.push_scene_config import BoxConfig
 from cooperative_go2.entities.push_task_config import (
     PushTaskConfig,
@@ -429,6 +430,19 @@ def load_push_training_settings(path: Path) -> PushTrainingSettings:
         ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正。
     """
     return parse_push_training_settings(_read_yaml(path))
+
+
+def load_push_robustness_suite(path: Path) -> PushRobustnessSuite:
+    """1 台の箱押しの頑健性の評価の条件（configs/push_robustness.yaml 形式）を読み込み、検証済みの一覧を返す。
+
+    Args:
+        path: 設定ファイル。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: ファイルが無い。
+        ConfigValidationError: YAML として読めない、またはキーの過不足・型・値が不正（条件の名前の重複を含む）。
+    """
+    return _build_dataclass(PushRobustnessSuite, _read_yaml(path), _ROOT_KEY_PATH)
 
 
 def parse_push_training_settings(data: object) -> PushTrainingSettings:
