@@ -16,6 +16,9 @@
 例（評価と同じ開始位置の試行 8・1 だけを動画付きで）:
     ros2 launch ros2_ws/launch/team.launch.py mode:=cooperative seed:=6001 num_trials:=16 trial_indices:=8,1 \\
         run_name:=e5-video-seed6001-trials8-1 video:=true
+例（学習した協調の方策。チェックポイントは協調学習の出力先と更新の回数で選ぶ）:
+    ros2 launch ros2_ws/launch/team.launch.py mode:=learned policy_run_dir:=outputs/team_marl/mappo-shared-seed21 \\
+        policy_iteration:=1000 seed:=6001 num_trials:=16 run_name:=learned-mappo-shared-seed6001
 例（E3: 1 台）:
     ros2 launch ros2_ws/launch/team.launch.py config:=configs/ros2_team_single.yaml robots:=go2_a \\
         mode:=independent seed:=6001 num_trials:=16 run_name:=e3-seed6001
@@ -36,6 +39,9 @@ EVAL_ROOT = "outputs/ros2_team_eval"
 BAG_ROOT = "outputs/ros2_team_bags"
 # 歩行方策のノードの設定（1 台の箱押しと同じ歩行方策・指令の有効期限・実時間の条件）
 GAIT_CONFIG = "configs/ros2_push_single.yaml"
+# 学習した協調の方策で動かすモード（協調のノードの --mode learned）。launch はシステムの python3 で動き、venv にある
+# cooperative_go2（ros2_team_deciders.LEARNED_MODE）を読み込めないので、同じ値をここに書く
+LEARNED_MODE = "learned"
 # rosbag2 に残すトピック（相対名はロボットの Namespace の下）
 RECORDED_ROBOT_TOPICS = ("odom", "joint_states", "cmd_vel", "joint_targets")
 RECORDED_GLOBAL_TOPICS = ("/clock", "/team/object_state", "/team/agent_status", "/tf")
@@ -56,6 +62,14 @@ def _robot_nodes(context: LaunchContext) -> list[ExecuteProcess]:
     metrics_dir = PathJoinSubstitution([EVAL_ROOT, LaunchConfiguration("run_name"), "nodes"]).perform(context)
     config = LaunchConfiguration("config").perform(context)
     mode = LaunchConfiguration("mode").perform(context)
+    policy_args = []
+    if mode == LEARNED_MODE:
+        policy_run_dir = LaunchConfiguration("policy_run_dir").perform(context)
+        policy_iteration = LaunchConfiguration("policy_iteration").perform(context)
+        # 既定の空の値のまま渡すと、協調のノードが別の理由（カレントディレクトリに設定が無いなど）で止まり、原因が分かりにくい
+        if not policy_run_dir or not policy_iteration:
+            raise RuntimeError(f"mode:={LEARNED_MODE} には policy_run_dir と policy_iteration が必要")
+        policy_args = ["--policy-run-dir", policy_run_dir, "--policy-iteration", policy_iteration]
     nodes = []
     for robot in robots:
         namespace = ["-r", f"__ns:=/{robot}"]
@@ -67,7 +81,7 @@ def _robot_nodes(context: LaunchContext) -> list[ExecuteProcess]:
         )  # fmt: skip
         nodes.append(
             _venv_process(
-                "go2-ros2-team-coord", ["--config", config, "--mode", mode, "--metrics-dir", metrics_dir],
+                "go2-ros2-team-coord", ["--config", config, "--mode", mode, *policy_args, "--metrics-dir", metrics_dir],
                 f"{robot}_coord_policy", [*namespace, "-r", "__node:=coord_policy"],
             )
         )  # fmt: skip
@@ -119,7 +133,14 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "mode",
-                description="協調のモード（cooperative: E5 / cooperative_wait: E5 の止まって待つ版 / independent: E3・E4）",
+                description="協調のモード（cooperative: E5 / cooperative_wait: E5 の止まって待つ版 / independent: E3・E4 / "
+                "learned: 学習した協調の方策）",
+            ),
+            DeclareLaunchArgument(
+                "policy_run_dir", default_value="", description="mode:=learned のとき、協調学習の出力先"
+            ),
+            DeclareLaunchArgument(
+                "policy_iteration", default_value="", description="mode:=learned のとき、チェックポイントの更新の回数"
             ),
             DeclareLaunchArgument("seed", description="評価用の乱数シード"),
             DeclareLaunchArgument("num_trials", description="開始位置と初期姿勢を引く試行の数"),

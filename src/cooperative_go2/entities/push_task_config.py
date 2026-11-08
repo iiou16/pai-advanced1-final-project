@@ -125,20 +125,33 @@ def require_compatible_with_gait(task: PushTaskConfig, gait: GaitConfig) -> None
     Raises:
         InvalidPushConfigError: いずれかを満たさない。
     """
-    if not is_integer_ratio(task.episode.high_level_period_s, gait.env.control_dt_s):
+    require_high_level_compatible_with_gait(task.episode, task.commands, gait)
+
+
+def require_high_level_compatible_with_gait(
+    episode: PushEpisodeConfig, commands: PushCommandLimits, gait: GaitConfig
+) -> None:
+    """高レベル方策のエピソードの進め方と指令の範囲が、歩行方策の学習時の設定と矛盾しないことを確かめる。
+
+    条件は require_compatible_with_gait() と同じ。1 台の箱押しと 2 台の協調学習で共通に使う。
+
+    Raises:
+        InvalidPushConfigError: いずれかを満たさない。
+    """
+    if not is_integer_ratio(episode.high_level_period_s, gait.env.control_dt_s):
         raise InvalidPushConfigError(
-            f"episode.high_level_period_s ({task.episode.high_level_period_s}) は "
+            f"episode.high_level_period_s ({episode.high_level_period_s}) は "
             f"歩行方策の制御周期 env.control_dt_s ({gait.env.control_dt_s}) の整数倍が必要"
         )
-    require_commands_within_gait_range(task.commands, gait.command)
-    if task.episode.fall_roll_deg > gait.env.termination_roll_deg:
+    require_commands_within_gait_range(commands, gait.command)
+    if episode.fall_roll_deg > gait.env.termination_roll_deg:
         raise InvalidPushConfigError(
-            f"episode.fall_roll_deg ({task.episode.fall_roll_deg}) は歩行方策の学習時の "
+            f"episode.fall_roll_deg ({episode.fall_roll_deg}) は歩行方策の学習時の "
             f"env.termination_roll_deg ({gait.env.termination_roll_deg}) 以下が必要"
         )
-    if task.episode.fall_pitch_deg > gait.env.termination_pitch_deg:
+    if episode.fall_pitch_deg > gait.env.termination_pitch_deg:
         raise InvalidPushConfigError(
-            f"episode.fall_pitch_deg ({task.episode.fall_pitch_deg}) は歩行方策の学習時の "
+            f"episode.fall_pitch_deg ({episode.fall_pitch_deg}) は歩行方策の学習時の "
             f"env.termination_pitch_deg ({gait.env.termination_pitch_deg}) 以下が必要"
         )
 

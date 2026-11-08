@@ -1,4 +1,4 @@
-# 協調するロボットが互いに配信する、作業の状態と押す意図。
+# 協調するロボットが互いに配信する、作業の状態・押す意図と、自分の位置・向き・速度指令。
 # header.stamp は配信した時点のシミュレーション時刻、header.frame_id は位置と方向の座標系。
 
 uint8 PHASE_INIT=0
@@ -20,3 +20,9 @@ geometry_msgs/Point push_position
 geometry_msgs/Vector3 push_direction
 # 押し始める準備ができているか
 bool ready
+# header.stamp の時刻の自分の胴体の位置 [m]（z は使わない）とヨー角 [rad]。
+# 学習した協調の方策が、相手の位置と向きとして観測に入れる
+geometry_msgs/Point position
+float64 yaw
+# header.stamp の時刻の状態から決めた速度指令（x: vx [m/s]、y: vy [m/s]、z: yaw_rate [rad/s]、本体座標系）。押す意図として相手に伝える
+geometry_msgs/Vector3 command

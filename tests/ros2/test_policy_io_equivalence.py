@@ -12,10 +12,13 @@ from pathlib import Path
 import pytest
 import torch
 
+from cooperative_go2.entities.command_expiry import ns_to_seconds
+from cooperative_go2.entities.coordination_state_machine import TeamPhase
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.gait_observation import GAIT_OBSERVATION_DIM
 from cooperative_go2.entities.go2 import NUM_GO2_JOINTS
 from cooperative_go2.entities.go2_state import Go2Proprioception
+from cooperative_go2.entities.partner_channel import PartnerMessage, PartnerReception
 from cooperative_go2.entities.planar_frame import yaw_from_quat_wxyz
 from cooperative_go2.entities.push_observation import (
     PUSH_OBSERVATION_DIM,
@@ -24,8 +27,19 @@ from cooperative_go2.entities.push_observation import (
     build_push_observation,
 )
 from cooperative_go2.entities.push_task_config import PushTaskConfig
+from cooperative_go2.entities.push_trial import PlanarPose
 from cooperative_go2.entities.rigid_body_pose import RigidBodyPose, proprioception_from_pose
-from cooperative_go2.interface_adapters.config_loader import load_gait_settings, load_push_training_settings
+from cooperative_go2.entities.team_marl_observation import (
+    TEAM_ACTOR_OBSERVATION_DIM,
+    TeamActorObservationInputs,
+    build_team_actor_observation,
+)
+from cooperative_go2.interface_adapters.config_loader import (
+    load_gait_settings,
+    load_push_training_settings,
+    load_team_marl_run_settings,
+    load_team_run_settings,
+)
 from cooperative_go2.interface_adapters.ros2_messages import (
     make_contact_state,
     make_joint_state,
@@ -34,8 +48,21 @@ from cooperative_go2.interface_adapters.ros2_messages import (
     read_joint_state,
     read_odometry,
 )
+from cooperative_go2.interface_adapters.ros2_team_deciders import LearnedTeamDecider, RuleBasedTeamDecider
+from cooperative_go2.interface_adapters.ros2_team_messages import (
+    AgentStatusReport,
+    make_agent_status,
+    read_agent_status,
+)
 from cooperative_go2.use_cases.gait_controller import GaitController
 from cooperative_go2.use_cases.push_policy_driver import PushPolicyDriver, PushPolicyInputs
+from cooperative_go2.use_cases.team_policy_driver import TeamPolicyDriver
+from cooperative_go2.use_cases.team_push_agent import (
+    CoordinationMode,
+    RetreatArea,
+    TeamPushAgent,
+    TeamPushAgentInputs,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STAMP_NS = 1_234_560_000
@@ -179,3 +206,99 @@ def test_push_policy_observation_matches_training_observation(task: PushTaskConf
     )
 
     assert policy.observations[0] == pytest.approx(expected, abs=1e-5)
+
+
+def test_team_policy_observation_matches_training_observation(robot_truth: RigidBodyPose) -> None:
+    # 2 台の協調の Actor の観測を、ROS 2 の経路（odom・object_state・agent_status）から作っても学習環境と同じになること
+    team_task = load_team_marl_run_settings(REPO_ROOT / "configs" / "push_multi.yaml").settings.task
+    box_truth = RigidBodyPose.from_world_velocities(
+        torch.tensor([[1.3, 0.2, 0.15]]), _quat_from_rotation(-0.4, 0.0, 0.0),
+        torch.tensor([[0.25, 0.05, 0.0]]), torch.tensor([[0.0, 0.0, -0.3]]),
+    )  # fmt: skip
+    partner_report = AgentStatusReport(
+        agent_id="go2_b", stamp_ns=STAMP_NS - 100_000_000, phase=TeamPhase.APPROACH, push_position_xy_m=(0.0, 0.0),
+        push_dir_xy=(1.0, 0.0), position_xy_m=(0.6, -0.4), yaw_rad=0.3, command=(0.5, -0.1, 0.2),
+    )  # fmt: skip
+    start_ns = STAMP_NS - 1_000_000_000
+    max_age_s = team_task.communication.max_age_s
+    training_inputs = TeamActorObservationInputs(
+        robot=PlanarBodyState(
+            position_xy_m=torch.tensor([[0.4, -0.3]]),
+            yaw_rad=yaw_from_quat_wxyz(robot_truth.quat_wxyz),
+            lin_vel_xy_mps=torch.tensor([[0.35, -0.12]]),
+            yaw_rate_radps=torch.tensor([0.7]),
+        ),
+        robot_projected_gravity=(_rotation_matrix(YAW, PITCH, ROLL).T @ torch.tensor([0.0, 0.0, -1.0])).unsqueeze(0),
+        box=PlanarBodyState(
+            position_xy_m=torch.tensor([[1.3, 0.2]]),
+            yaw_rad=torch.tensor([-0.4]),
+            lin_vel_xy_mps=torch.tensor([[0.25, 0.05]]),
+            yaw_rate_radps=torch.tensor([-0.3]),
+        ),
+        goal_xy_m=torch.tensor([GOAL_XY]),
+        last_commands=torch.zeros(1, 3),
+        side_sign=1.0,
+        partner=PartnerReception(
+            message=PartnerMessage(
+                position_xy_m=torch.tensor([[0.6, -0.4]]), yaw_rad=torch.tensor([0.3]),
+                command=torch.tensor([[0.5, -0.1, 0.2]]), stamp_s=torch.tensor([0.9]),
+            ),
+            received=torch.tensor([True]),
+            age_s=torch.tensor([0.1]),
+        ),  # fmt: skip
+    )
+    expected = build_team_actor_observation(training_inputs, team_task.observation, max_age_s)
+    policy = LinearPolicy(TEAM_ACTOR_OBSERVATION_DIM, 3)
+    decider = LearnedTeamDecider(TeamPolicyDriver(policy, team_task, robot_index=0))
+    decider.start(RetreatArea(center_xy_m=GOAL_XY, radius_m=0.4), start_ns)
+    decider.observe_partner(read_agent_status(make_agent_status(partner_report, "map")))
+
+    decider.decide(
+        STAMP_NS,
+        read_odometry(make_odometry(STAMP_NS, "map", "go2_a/base_link", robot_truth)).pose,
+        read_odometry(make_odometry(STAMP_NS, "map", "box", box_truth)).pose,
+    )
+
+    assert policy.observations[0] == pytest.approx(expected, abs=1e-5)
+
+
+def test_rule_based_decider_makes_the_same_decision_as_the_push_agent(robot_truth: RigidBodyPose) -> None:
+    # 判断器に分けても、規則ベースの協調の判断（TeamPushAgent）は同じ入力で同じ指令と段階になること
+    run = load_team_run_settings(REPO_ROOT / "configs" / "team_rule_based.yaml")
+    team = run.settings.team
+    retreat = RetreatArea(center_xy_m=(3.8, 0.0), radius_m=0.4)
+    box_truth = RigidBodyPose.from_world_velocities(
+        torch.tensor([[1.4, 0.0, 0.15]]), _quat_from_rotation(0.1, 0.0, 0.0), torch.zeros(1, 3), torch.zeros(1, 3)
+    )
+    partner_report = AgentStatusReport(
+        agent_id="go2_b", stamp_ns=STAMP_NS - 100_000_000, phase=TeamPhase.READY, push_position_xy_m=(0.8, -0.25),
+        push_dir_xy=(1.0, 0.0), position_xy_m=(0.8, -0.25), yaw_rad=0.0, command=(0.0, 0.0, 0.0),
+    )  # fmt: skip
+    agent = TeamPushAgent(team, 0, CoordinationMode.COOPERATIVE)
+    agent.start(retreat, now_s=ns_to_seconds(STAMP_NS - 1_000_000_000))
+    decider = RuleBasedTeamDecider(team, 0, CoordinationMode.COOPERATIVE)
+    decider.start(retreat, STAMP_NS - 1_000_000_000)
+    decider.observe_partner(partner_report)
+    robot = read_odometry(make_odometry(STAMP_NS, "map", "go2_a/base_link", robot_truth)).pose
+    box = read_odometry(make_odometry(STAMP_NS, "map", "box", box_truth)).pose
+    planar = robot.to_planar()
+    box_planar = box.to_planar()
+
+    expected = agent.decide(
+        TeamPushAgentInputs(
+            now_s=ns_to_seconds(STAMP_NS),
+            robot=PlanarPose(float(planar.position_xy_m[0, 0]), float(planar.position_xy_m[0, 1]), float(planar.yaw_rad[0])),
+            box=PlanarPose(float(box_planar.position_xy_m[0, 0]), float(box_planar.position_xy_m[0, 1]),
+                           float(box_planar.yaw_rad[0])),
+            partner=partner_report.to_partner_status(),
+            task_assigned=True,
+            # robot_truth のロール・ピッチ（約 3°・5°）は転倒の傾き（10°）より小さい
+            fallen=False,
+        )
+    )  # fmt: skip
+    actual = decider.decide(STAMP_NS, robot, box)
+
+    assert torch.equal(actual.commands, expected.commands)
+    assert actual.phase is expected.state.phase
+    assert actual.push_position_xy_m == expected.push_position_xy_m
+    assert actual.partner_age_s == pytest.approx(0.1)

@@ -165,7 +165,7 @@ uv run --frozen python scripts/p3_ros2_check/check_bag_clock.py outputs/ros2_bag
 |---|---|---|
 | `genesis_sim` | `go2-ros2-team-sim` | Genesis のシーンを進める唯一のプロセス。各ロボットの `/go2_x/odom`・`joint_states`、`/team/object_state`・TF を配信し、各ロボットの `joint_targets` を受けて PD 制御する。試行ごとに開始位置を引き、タスク管理に通路の開通を依頼し、真値（通路の開通・箱が退避領域に入ったまま 1 s 続いたか・転倒）とタスク管理の結果を記録する |
 | `task_manager` | `go2-ros2-task-manager` | `/task/clear_corridor`（`ClearCorridor` の Action）で依頼を受け、各ロボットの協調のノードへ割り振り、進捗を返し、成功・失敗・時間切れを判定する |
-| `/go2_x/coord_policy` | `go2-ros2-team-coord` | 状態機械（INIT → APPROACH → ALIGN → READY → PUSH → VERIFY → DONE / FAILED）で判断し、`cmd_vel` と作業の状態（`/team/agent_status`）を配信する（10 Hz）。協調のモードでは相手の状態を受け、相手の準備を待って同時に押し始める。相手の状態が 0.5 s 途絶えたら・相手が失敗したら押すのをやめて待つ |
+| `/go2_x/coord_policy` | `go2-ros2-team-coord` | 状態機械（INIT → APPROACH → ALIGN → READY → PUSH → VERIFY → DONE / FAILED）で判断し、`cmd_vel` と作業の状態（`/team/agent_status`。段階・押す意図・自分の位置と向きと指令）を配信する（10 Hz）。協調のモードでは相手の状態を受け、相手の準備を待って同時に押し始める。相手の状態が 0.5 s 途絶えたら・相手が失敗したら押すのをやめて待つ。`mode:=learned` では、状態機械の代わりに学習した協調の方策で判断する（下の「2 台の協調学習」） |
 | `/go2_x/gait_policy` | `go2-ros2-gait` | 1 台の箱押しと同じ歩行方策のノード |
 
 設定は `configs/ros2_team.yaml`（2 台）・`configs/ros2_team_single.yaml`（1 台）と、それが指す `configs/team_rule_based*.yaml`・`configs/scenes/s3_*.yaml`。
@@ -231,6 +231,69 @@ uv run python scripts/p4_coordination_check/run_team_push.py --device cuda --con
   残る失敗の多くは、片方が回った箱の後ろの押す位置に戻れない時間切れ。タスク管理の結果は全条件・全試行で真値の判定と一致した。
 - 物理は方策の応答を待たずに進めるので、同じ開始位置でも実行ごとに結果が変わる（2 回の実行で成功の数はほぼ同じだが、
   E5 で 2 回とも成功した試行は 1 つだけ）。条件の比較は試行ごとではなく、試行の割合で行う。
+
+## 2 台の協調学習（IPPO・MAPPO）と比較
+
+上と同じ通路・重い箱・開始位置の散らし方で、2 台の協調を強化学習で獲得する。各ロボットの方策（Actor）は ROS 2 の実行時にも
+受け取れる情報だけを観測する（自分の odom、箱の状態、退避領域、自分が前に出した指令、自分の側、`/team/agent_status` で
+最後に届いた相手の位置・向き・指令とその古さ）。学習時は ROS 2 を通さず、相手の状態を 0.1 s（1 周期）遅らせ、1 割を落として届ける。
+価値関数（Critic）は、IPPO（E6）では Actor と同じ観測、MAPPO（E7）では学習時にだけ使える全体の真の状態（2 台と箱の状態・接触など）を読む。
+ライブラリは skrl 2.1.1 で、IPPO と MAPPO の違いは Critic の入力だけになる。2 台で Actor と Critic を共有する方式と、別々に学習する方式を選べる。
+
+報酬は、箱が退避領域に近づいた量・成功・箱の回転を 2 台で共有し、自分の押す位置（規則ベースと同じ、箱の後ろに横に並ぶ位置）に
+近づいた量・意図した面での接触・転倒・シーン外への離脱・ロボット同士の接近・指令の大きさをロボットごとに与える。
+シーン・開始位置の散らし方と引く順・判断の周期・転倒の判定・時間切れ（60 s）・成功の判定（退避領域に入ったまま 1 s）・指令の上限
+（0.6 m/s）は規則ベースの協調（E4・E5）とそろえる（`tests/unit/test_push_multi_config.py`）。設定は `configs/push_multi.yaml`。
+
+```bash
+source scripts/setup/env.sh
+
+# 学習（出力: outputs/team_marl/<run-name>/。チェックポイント（50 回の更新ごと）・TensorBoard のログ・設定の写し・学習方式・コミット）。
+# 1024 環境・1000 回の更新で、RTX 2080 Ti で約 2 時間 45 分
+uv run go2-train-team-marl --config configs/push_multi.yaml --algorithm mappo --parameter-sharing separate \
+    --run-name mappo-separate-seed21
+
+# ROS 2 を通さない並列環境での評価（出力: outputs/team_marl_eval/<name>/ に trials.csv と summary.json）。
+# 規則ベースの協調の並列環境での確認（scripts/p4_coordination_check/run_team_push.py）と同じシード・試行の数なら同じ開始位置
+uv run go2-evaluate-team-marl --run-dir outputs/team_marl/mappo-separate-seed21 --iteration 1000 --num-envs 32 --seed 5001 \
+    --drop-probability 0.0 --device cuda --output-dir outputs/team_marl_eval/mappo-separate-seed21-it1000-seed5001
+
+# ROS 2 を経由した評価（上の規則ベースの協調と同じ launch。ros2_ws の msg を変えたのでビルドし直してから）
+source /opt/ros/jazzy/setup.bash
+source ros2_ws/install/setup.bash
+ros2 launch ros2_ws/launch/team.launch.py mode:=learned policy_run_dir:=outputs/team_marl/mappo-separate-seed21 \
+    policy_iteration:=1000 seed:=6001 num_trials:=16 run_name:=learned-mappo-separate-seed6001 device:=cpu
+
+# 方式ごとに複数の実行を合わせて表にする
+uv run python scripts/p5_marl_check/compare_ros2_team_runs.py --output outputs/p5_marl_check/comparison.json \
+    --method "E5=e5-seed6001,e5-seed6001-rerun" --method "MAPPO・別々=learned-mappo-separate-seed6001,learned-mappo-separate-seed6001-rerun"
+```
+
+- 学習した協調の方策のチェックポイントは配布していない（上の手順で学習し直す）。
+- ROS 2 を経由して、E3〜E7 を同じ条件・同じコードで比べた（シード 6001 の 16 試行を 2 回、E3 は 1 回。Genesis は CPU。
+  E3〜E5 もこのコードで流し直したので、上の規則ベースの表と少し違う）。学習はどれもシード 21・1000 回の更新:
+
+  | 条件 | 成功 | 通路の開通 | 開通までの平均 | 成功までの平均 | 箱の回転の最大（平均／全体） | 押し始めの時刻の差（平均） | 転倒 |
+  |---|---|---|---|---|---|---|---|
+  | E3 1 台 | 0/16 | 0/16 | — | — | 4° / 4° | — | 0 |
+  | E4 2 台・通信なし | 20/32 | 22/32 | 20.4 s | 26.0 s | 39° / 85° | 1.17 s | 0 |
+  | E5 2 台・規則ベースの協調 | 19/32 | 20/32 | 17.0 s | 23.1 s | 17° / 42° | 0.01 s | 0 |
+  | E6 IPPO（共有） | 23/32 | 25/32 | 12.8 s | 17.9 s | 53° / 90° | — | 6 |
+  | E7 MAPPO（共有） | 32/32 | 32/32 | 8.6 s | 10.9 s | 77° / 90° | — | 0 |
+  | E7 MAPPO（別々） | 32/32 | 32/32 | 6.1 s | 8.2 s | 36° / 89° | — | 0 |
+
+  MAPPO は成功・開通・所要時間で規則ベースと IPPO を上回った。転倒は規則ベースと同じ 0（IPPO は 6）。同じ共有の方式で比べると、
+  ROS 2 では集中 Critic で成功が 23 から 32 に増え、転倒が 6 から 0 になった。劣ったのは箱の回転で、回転の最大の平均は
+  MAPPO（別々）36°・MAPPO（共有）77° で、押し始めをそろえる E5（17°）より大きい。ただし回転したままでも全試行で通路を開けた。
+  タスク管理の結果は全条件・全試行で真値の判定と一致した。
+- ROS 2 を通さない並列環境（シード 5001・32 試行・欠落なし）では、成功は E4 18・E5 20・IPPO（共有）28・MAPPO（共有）28・
+  MAPPO（別々）32、回転の最大の平均は 48°・17°・49°・74°・28°、転倒は 4・0・3・4・0。並列環境では IPPO と MAPPO（共有）の
+  成功は同じで、集中 Critic の効果は ROS 2 の評価ほどはっきりしない。
+- 学習した方策には段階が無いので、押し始めの時刻（PUSH に入った時刻）は記録しない。
+- どの方式も学習のシードは 1 つで、シード間のばらつきは測っていない。共有の方式は skrl がロボットごとに順に更新するので、
+  共有と別々の差には更新の仕方の違いも含まれる。
+- 回転の減点を 5 倍にした設定（`configs/push_multi_rotation.yaml`）で MAPPO（別々）を学習し直しても、ROS 2 で成功 31/32・
+  回転の最大は平均 35°（全体 86°）で回転は減らず、成功までの平均は 10.7 s に延びた。
 
 ## テスト
 

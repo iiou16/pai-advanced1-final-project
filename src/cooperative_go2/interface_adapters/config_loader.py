@@ -23,9 +23,11 @@ from cooperative_go2.entities.push_task_config import (
     PushTrainingRunConfig,
     require_rule_based_within_commands,
 )
+from cooperative_go2.entities.team_marl_config import TeamMarlTaskConfig
 from cooperative_go2.entities.team_task_config import TeamRuleBasedConfig
 from cooperative_go2.interface_adapters.genesis_scene_config import GenesisSceneConfig, require_genesis_friction
 from cooperative_go2.interface_adapters.rsl_rl_config import RslRlPpoConfig
+from cooperative_go2.interface_adapters.skrl_marl_config import SkrlMarlPpoConfig
 
 _ROOT_KEY_PATH = "<root>"
 # 歩行の設定ファイルのうち、RSL-RL 固有の設定を書く節の名前
@@ -107,6 +109,33 @@ class TeamRunSettings:
     """規則ベースで箱を押す作業の設定と、それが指すシーンの設定。ロボットの数がそろっていることを確かめてある。"""
 
     settings: TeamRuleBasedSettings
+    scene: CorridorSceneSettings
+
+
+@dataclass(frozen=True)
+class TeamMarlTrainingSettings:
+    """2 台の協調学習の設定ファイル（configs/push_multi.yaml）1 つ分。
+
+    Attributes:
+        scene_config: 通路のシーンの設定ファイル（configs/scenes/s3_team.yaml 形式）。相対パスは現在の作業ディレクトリ起点。
+        gait_policy: 固定して使う歩行方策の出所。
+        task: 協調学習の環境の設定。内側の層に渡す。
+        skrl: IPPO・MAPPO とネットワークの設定（skrl との接続にだけ使う）。
+        training: 学習の実行条件（シードと、更新の回数 max_iterations）。
+    """
+
+    scene_config: str
+    gait_policy: GaitPolicySource
+    task: TeamMarlTaskConfig
+    skrl: SkrlMarlPpoConfig
+    training: PushTrainingRunConfig
+
+
+@dataclass(frozen=True)
+class TeamMarlRunSettings:
+    """2 台の協調学習の設定と、それが指すシーンの設定。ロボットの数がそろっていることを確かめてある。"""
+
+    settings: TeamMarlTrainingSettings
     scene: CorridorSceneSettings
 
 
@@ -321,6 +350,53 @@ def load_team_run_settings(path: Path) -> TeamRunSettings:
         )
     _require_push_positions_fit_box(path, settings.team, scene.scene.box.size_m)
     return TeamRunSettings(settings=settings, scene=scene)
+
+
+def load_team_marl_run_settings(path: Path) -> TeamMarlRunSettings:
+    """2 台の協調学習の設定ファイルと、それが指すシーンの設定ファイルを読み込み、検証済みの設定を返す。
+
+    歩行方策の学習時の設定との突き合わせは、歩行方策を読み込んだ後に環境の構築時に行う。
+
+    Args:
+        path: 協調学習の設定ファイル（configs/push_multi.yaml 形式）。相対パスは現在の作業ディレクトリ起点。
+
+    Raises:
+        FileNotFoundError: 協調学習またはシーンの設定ファイルが無い。
+        ConfigValidationError: YAML として読めない、キーの過不足・型・値が不正、または task.agent_side_signs の数が
+            シーンのロボットの数と違う。
+    """
+    settings = _build_dataclass(TeamMarlTrainingSettings, _read_yaml(path), _ROOT_KEY_PATH)
+    return _team_marl_run_settings(path, settings, Path(settings.scene_config))
+
+
+def load_team_marl_run_settings_with_scene(path: Path, scene_path: Path) -> TeamMarlRunSettings:
+    """2 台の協調学習の設定ファイルを、設定の scene_config ではなく scene_path のシーンの設定と組み合わせて読み込む。
+
+    学習の出力先に残した写し（設定とシーン）から読むのに使う。学習後に作業ツリーのシーンの設定が変わっても、
+    学習時のシーンで方策を評価・実行するため。
+
+    Args:
+        path: 協調学習の設定ファイル（configs/push_multi.yaml 形式）。
+        scene_path: 組み合わせるシーンの設定ファイル（configs/scenes/s3_team.yaml 形式）。
+
+    Raises:
+        FileNotFoundError: 協調学習またはシーンの設定ファイルが無い。
+        ConfigValidationError: YAML として読めない、キーの過不足・型・値が不正、または task.agent_side_signs の数が
+            シーンのロボットの数と違う。
+    """
+    settings = _build_dataclass(TeamMarlTrainingSettings, _read_yaml(path), _ROOT_KEY_PATH)
+    return _team_marl_run_settings(path, settings, scene_path)
+
+
+def _team_marl_run_settings(path: Path, settings: TeamMarlTrainingSettings, scene_path: Path) -> TeamMarlRunSettings:
+    scene = load_corridor_scene_settings(scene_path)
+    num_robots = len(scene.scene.robots)
+    if settings.task.num_agents != num_robots:
+        raise ConfigValidationError(
+            f"{path}: task.agent_side_signs の数 {settings.task.num_agents} がシーン {scene_path} の"
+            f"ロボットの数 {num_robots} と違う"
+        )
+    return TeamMarlRunSettings(settings=settings, scene=scene)
 
 
 def _require_push_positions_fit_box(path: Path, team: TeamRuleBasedConfig, box_size_m: tuple[float, ...]) -> None:
