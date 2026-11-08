@@ -65,6 +65,10 @@ from cooperative_go2.interface_adapters.push_evaluation_store import (
     PushEvaluationConditions,
     PushEvaluationOutputExistsError,
 )
+from cooperative_go2.interface_adapters.push_robustness_settings import (
+    IneffectiveBoxFrictionError,
+    apply_robustness_condition,
+)
 from cooperative_go2.interface_adapters.rsl_rl_policy import CheckpointLoadError, CheckpointNotFoundError
 from cooperative_go2.use_cases.evaluate_push import EvaluationDidNotFinishError, PushCommandSource, evaluate_push
 from cooperative_go2.use_cases.simulation_errors import SimulationSetupError
@@ -84,7 +88,8 @@ EXIT_SIMULATION_SETUP_FAILED = 4
 EXIT_EVALUATION_DID_NOT_FINISH = 5
 EXIT_GIT_UNAVAILABLE = 6
 EXIT_VIDEO_RECORDING_FAILED = 7
-# 評価の設定のままで、速度指令を遅らせないとき
+
+# 頑健性の評価の条件を指定しない通常の評価では、速度指令を遅らせない
 NO_COMMAND_DELAY_GAIT_STEPS = 0
 
 logger = logging.getLogger(__name__)
@@ -96,10 +101,6 @@ class MissingPolicyArgumentsError(ValueError):
 
 class InvalidRobustnessArgumentsError(ValueError):
     """頑健性の評価の条件の指定が不正（設定と名前の片方だけ、--box-mass-kg との併用）であることを表す。"""
-
-
-class IneffectiveBoxFrictionError(ValueError):
-    """頑健性の評価の条件の箱の摩擦が床の摩擦より小さく、実際の摩擦が変わらないことを表す。"""
 
 
 @dataclass(frozen=True)
@@ -153,31 +154,14 @@ def _find_robustness_condition_or_none(args: argparse.Namespace) -> PushRobustne
     return load_push_robustness_suite(args.robustness_config).get_condition(args.condition)
 
 
-def _apply_robustness_condition(
-    settings: PushTrainingSettings, scene: PushSceneSettings, condition: PushRobustnessCondition
-) -> _EvaluationInputs:
-    floor_friction = default_friction()
-    if condition.box_friction < floor_friction:
-        raise IneffectiveBoxFrictionError(
-            f"条件 {condition.name} の箱の摩擦 {condition.box_friction} は床の摩擦 {floor_friction} より小さく、"
-            "接触する 2 面の大きい方が使われるため実際の摩擦は変わらない"
-        )
-    box = dataclasses.replace(scene.box, mass_kg=condition.box_mass_kg, friction=condition.box_friction)
-    task = dataclasses.replace(settings.task, reset=condition.reset)
-    return _EvaluationInputs(
-        settings=dataclasses.replace(settings, task=task),
-        scene=dataclasses.replace(scene, box=box),
-        robustness_condition=condition,
-    )
-
-
 def _evaluation_inputs(args: argparse.Namespace) -> _EvaluationInputs:
     settings = load_push_training_settings(args.config)
     scene = _scene_settings(settings, args.box_mass_kg)
     condition = _find_robustness_condition_or_none(args)
     if condition is None:
         return _EvaluationInputs(settings, scene, robustness_condition=None)
-    return _apply_robustness_condition(settings, scene, condition)
+    applied = apply_robustness_condition(settings, scene, condition, default_friction())
+    return _EvaluationInputs(applied.settings, applied.scene, robustness_condition=condition)
 
 
 def _command_source(args: argparse.Namespace, settings: PushTrainingSettings) -> PushCommandSource:
@@ -246,7 +230,8 @@ def main(argv: list[str] | None = None) -> None:
     try:
         inputs = _evaluation_inputs(args)
         commit_sha = current_commit_sha()
-    # InvalidConfigError は、置き換えた箱の質量・摩擦がシーンの設定の値域を外れたとき
+    # InvalidConfigError は設定の値の検証の失敗（--box-mass-kg や頑健性の条件で置き換えた箱の質量・摩擦が、
+    # シーンの設定の値域を外れたときなど）
     except (FileNotFoundError, ConfigValidationError, InvalidConfigError, InvalidRobustnessArgumentsError,
             UnknownRobustnessConditionError, IneffectiveBoxFrictionError) as error:  # fmt: skip
         logger.error("評価の条件が不正: %s", error)
