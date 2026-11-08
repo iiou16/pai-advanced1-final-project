@@ -1,7 +1,8 @@
 """1 台の箱押しの頑健性の評価（run_push_robustness.py の出力）を、条件と方式ごとに 3 シードを合わせて表にする。
 
 各評価の trials.csv（試行ごとの結果）を読み、条件 × 方式ごとに全シードの試行を合わせた指標と、シードごとの成功率の
-範囲を出す。結果は Markdown の表（robustness.md）と CSV（robustness.csv）に書く。評価の抜けがあれば止まる。
+範囲を出す。結果は Markdown の表（robustness.md）と CSV（robustness.csv）に書く。評価の抜けがあるか、評価の記録の条件が
+今の設定と一致しなければ（古い設定で流した結果）止まる。
 
 実行例（リポジトリのルートで）:
     uv run --frozen python scripts/p6_robustness/summarize_push_robustness.py --output-dir outputs/push_eval/e8-summary
@@ -14,15 +15,29 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from run_push_robustness import ALGORITHMS, OUTPUT_ROOT, ROBUSTNESS_CONFIG, SEEDS, SUMMARY_FILENAME, run_name
+from run_push_robustness import (
+    ALGORITHMS,
+    ROBUSTNESS_CONFIG,
+    SEEDS,
+    StaleEvaluationError,
+    require_matching_record,
+    run_name,
+)
 
+from cooperative_go2.entities.push_robustness import PushRobustnessCondition
+from cooperative_go2.entities.push_termination import PushTerminationReason
+from cooperative_go2.frameworks.evaluate_push import ALGORITHM_POLICY, ALGORITHM_RULE_BASED, OUTPUT_ROOT
 from cooperative_go2.interface_adapters.config_loader import load_push_robustness_suite
+from cooperative_go2.interface_adapters.push_evaluation_store import SUMMARY_FILENAME, TRIALS_FILENAME
 
-TRIALS_FILENAME = "trials.csv"
 TRUE_TEXT = "True"
 FALSE_TEXT = "False"
-TIME_OUT_REASON = "TIME_OUT"
-ALGORITHM_LABELS = {"rule_based": "規則ベース", "policy": "学習した方策"}
+TIME_OUT_REASON = PushTerminationReason.TIME_OUT.name
+ALGORITHM_LABELS = {ALGORITHM_RULE_BASED: "規則ベース", ALGORITHM_POLICY: "学習した方策"}
+# 集計に使う trials.csv の列（push_evaluation_store.TRIAL_COLUMNS のうち）。記録に無ければ止める
+REQUIRED_COLUMNS = (
+    "success", "elapsed_sim_s", "final_goal_distance_m", "payload_rotation_deg", "falls", "termination_reason", "commit_sha",
+)  # fmt: skip
 PERCENT = 100.0
 
 
@@ -76,18 +91,23 @@ def _read_trials(name: str) -> list[dict[str, str]]:
     if not (output_dir / SUMMARY_FILENAME).exists():
         raise SummaryInputError(f"評価が終わっていない（{SUMMARY_FILENAME} が無い）: {output_dir}")
     with (output_dir / TRIALS_FILENAME).open(encoding="utf-8", newline="") as file:
-        rows = list(csv.DictReader(file))
+        reader = csv.DictReader(file)
+        missing = sorted(set(REQUIRED_COLUMNS) - set(reader.fieldnames or ()))
+        rows = list(reader)
+    if missing:
+        raise SummaryInputError(f"{output_dir / TRIALS_FILENAME} に集計に使う列が無い: {missing}")
     if not rows:
         raise SummaryInputError(f"試行が無い: {output_dir / TRIALS_FILENAME}")
     return rows
 
 
-def _summarize(condition: str, algorithm: str) -> ConditionSummary:
+def _summarize(condition: PushRobustnessCondition, algorithm: str) -> ConditionSummary:
     rows: list[dict[str, str]] = []
     seed_success_rates: list[float] = []
     for seed in SEEDS:
-        name = run_name(algorithm, condition, seed)
+        name = run_name(algorithm, condition.name, seed)
         seed_rows = _read_trials(name)
+        require_matching_record(algorithm, condition, seed)
         path = OUTPUT_ROOT / name / TRIALS_FILENAME
         successes = [_parse_bool(row["success"], path) for row in seed_rows]
         seed_success_rates.append(sum(successes) / len(successes))
@@ -95,7 +115,7 @@ def _summarize(condition: str, algorithm: str) -> ConditionSummary:
     success_times = [float(row["elapsed_sim_s"]) for row in rows if row["success"] == TRUE_TEXT]
     trials = len(rows)
     return ConditionSummary(
-        condition=condition,
+        condition=condition.name,
         algorithm=algorithm,
         trials=trials,
         success_rate=len(success_times) / trials,
@@ -148,9 +168,9 @@ def main(argv: list[str] | None = None) -> None:
     suite = load_push_robustness_suite(ROBUSTNESS_CONFIG)
     try:
         summaries = [
-            _summarize(condition.name, algorithm) for condition in suite.conditions for algorithm in ALGORITHMS
+            _summarize(condition, algorithm) for condition in suite.conditions for algorithm in ALGORITHMS
         ]
-    except SummaryInputError as error:
+    except (SummaryInputError, StaleEvaluationError) as error:
         print(error, file=sys.stderr)
         sys.exit(1)
     if args.output_dir.exists():
