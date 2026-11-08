@@ -10,6 +10,7 @@ from typing import Protocol
 import torch
 from tensordict import TensorDict
 
+from cooperative_go2.entities.command_delay import CommandDelayLine
 from cooperative_go2.entities.episode_reward_tracker import EpisodeRewardTracker, EpisodeSummary, EpisodeTrackingSpec
 from cooperative_go2.entities.gait_config import GaitConfig
 from cooperative_go2.entities.go2_state import Go2State, sample_reset_dof_pos
@@ -93,12 +94,15 @@ class PushEnvSetup:
         gait: 固定して使う歩行方策を学習したときの設定（学習の出力先に複製されたもの）。
         base_box_xy_m: 箱を置く基準の位置 (x, y) [m]（シーンの設定の箱の初期位置）。
         generator: 配置とリセット時の関節角のばらつきを引く乱数生成器。シードを固定して渡す。
+        command_delay_gait_steps: 高レベル方策の速度指令が歩行方策に届くまでの遅れ（歩行の制御周期の数、0 以上の整数）。
+            学習では 0（遅れなし）。通信の遅れに対する頑健性を評価するときだけ正の値にする。
     """
 
     task: PushTaskConfig
     gait: GaitConfig
     base_box_xy_m: tuple[float, ...]
     generator: torch.Generator
+    command_delay_gait_steps: int
 
 
 @dataclass(frozen=True)
@@ -130,6 +134,8 @@ class Go2PushEnv:
     リセットでは、Go2 を歩行方策の学習時と同じ初期位置・関節角のばらつきで置き、箱と目標を sample_push_layout で置く。
     歩行方策の学習時に行動を 1 制御周期遅らせていた場合（env.simulate_action_latency）は、ここでも目標関節角を
     1 制御周期遅らせて適用する。歩行方策が学習したときと同じ遅れで動かすため。
+    setup.command_delay_gait_steps が正なら、速度指令をその制御周期の数だけ遅らせて歩行方策に渡す。遅れのあいだ
+    （試行の始め）は停止の指令を渡す。報酬と観測の前回の指令には、遅らせる前の指令（高レベル方策が出したもの）を使う。
     S1 には壁も他のロボットも無いので、報酬の unsafe_collision は常に 0 にする。
 
     num_envs・num_actions・max_episode_length・episode_length_buf・device・cfg は RSL-RL の VecEnv の契約。
@@ -145,6 +151,7 @@ class Go2PushEnv:
 
         Raises:
             InvalidPushConfigError: 箱押しの設定が歩行方策の学習時の設定と矛盾する。
+            InvalidCommandDelayError: setup.command_delay_gait_steps が 0 以上の整数でない。
         """
         require_compatible_with_gait(setup.task, setup.gait)
         task = setup.task
@@ -175,6 +182,7 @@ class Go2PushEnv:
         self._previous_box_yaw = torch.zeros(self.num_envs, device=self.device)
         self._last_commands = torch.zeros((self.num_envs, VELOCITY_COMMAND_SIZE), device=self.device)
         self._pending_joint_targets = simulation.default_dof_pos.expand(self.num_envs, -1).clone()
+        self._command_delay = CommandDelayLine(setup.command_delay_gait_steps, self.num_envs, self.device)
         self.reset()
 
     @property
@@ -267,7 +275,8 @@ class Go2PushEnv:
         diverged = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         simulate_latency = self._setup.gait.env.simulate_action_latency
         for _ in range(self._gait_steps):
-            joint_targets = self._controller.compute_joint_targets(self._go2_state.proprioception, commands)
+            delivered_commands = self._command_delay.push(commands)
+            joint_targets = self._controller.compute_joint_targets(self._go2_state.proprioception, delivered_commands)
             if simulate_latency:
                 self._simulation.apply_joint_targets(self._pending_joint_targets)
                 self._pending_joint_targets = joint_targets
@@ -311,7 +320,7 @@ class Go2PushEnv:
         self._go2_state = self._go2_state.reset_where(
             mask, self._simulation.initial_go2_state.with_dof_pos(reset_dof_pos)
         )
-        # 前のステップの値（箱と目標の距離・箱の向き・指令・遅らせて適用する目標関節角）も新しいエピソードの値にする。
+        # 前のステップの値（箱と目標の距離・箱の向き・指令・遅らせて渡す指令と目標関節角）も新しいエピソードの値にする。
         # 残すと、リセット直後のステップで前のエピソードとの差が報酬になる
         rows = mask.unsqueeze(1)
         self._goal_xy = torch.where(rows, layout.goal_xy_m, self._goal_xy)
@@ -321,6 +330,7 @@ class Go2PushEnv:
         self._previous_box_yaw = self._previous_box_yaw.masked_fill(mask, 0.0)
         self._last_commands = self._last_commands.masked_fill(rows, 0.0)
         self._pending_joint_targets = torch.where(rows, self._simulation.default_dof_pos, self._pending_joint_targets)
+        self._command_delay.reset_where(mask)
         self._hold_steps = self._hold_steps.masked_fill(mask, 0)
         self._box_contact = self._box_contact & ~mask
         self._robot = self._robot_at_reset(mask)

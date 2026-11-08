@@ -52,7 +52,13 @@ def main() -> None:
     generator = make_seeded_generator(SEED)
     simulation = GenesisPushSimulation.build(gait, scene_settings, PushSceneRequest(NUM_ENVS, video=None))
     controller = load_gait_controller(run_dir, settings.gait_policy.checkpoint, NUM_ENVS, generator.device)
-    setup = PushEnvSetup(task=task, gait=gait, base_box_xy_m=scene_settings.box.initial_xy_m, generator=generator)
+    setup = PushEnvSetup(
+        task=task,
+        gait=gait,
+        base_box_xy_m=scene_settings.box.initial_xy_m,
+        generator=generator,
+        command_delay_gait_steps=0,
+    )
     env = Go2PushEnv(setup, simulation, controller)
 
     reasons: Counter[str] = Counter()
