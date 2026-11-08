@@ -35,7 +35,7 @@ def _condition(name: str, command_delay_gait_steps: int = 0) -> PushRobustnessCo
 
 
 def _changed_factors(condition: PushRobustnessCondition, nominal: PushRobustnessCondition) -> list[str]:
-    factors = ("box_mass_kg", "box_friction", "reset", "command_delay_gait_steps")
+    factors = [field.name for field in dataclasses.fields(PushRobustnessCondition) if field.name != "name"]
     return [factor for factor in factors if getattr(condition, factor) != getattr(nominal, factor)]
 
 
@@ -70,13 +70,22 @@ def test_duplicated_condition_names_are_rejected() -> None:
         PushRobustnessSuite(conditions=(_condition(NOMINAL), _condition(NOMINAL)))
 
 
-def test_negative_command_delay_is_rejected() -> None:
+@pytest.mark.parametrize("command_delay_gait_steps", [-1, 1.5, True])
+def test_command_delay_that_is_not_a_non_negative_integer_is_rejected(command_delay_gait_steps: object) -> None:
     with pytest.raises(InvalidPushConfigError, match="command_delay_gait_steps"):
-        _condition("delay", command_delay_gait_steps=-1)
+        _condition("delay", command_delay_gait_steps=command_delay_gait_steps)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("field", ["box_mass_kg", "box_friction"])
+def test_non_positive_box_mass_or_friction_is_rejected(field: str) -> None:
+    with pytest.raises(InvalidPushConfigError, match=field):
+        dataclasses.replace(_condition(NOMINAL), **{field: 0.0})
 
 
 def test_condition_with_missing_key_is_rejected_on_load(tmp_path: Path) -> None:
-    text = ROBUSTNESS_CONFIG.read_text(encoding="utf-8").replace("    command_delay_gait_steps: 0\n", "", 1)
+    original = ROBUSTNESS_CONFIG.read_text(encoding="utf-8")
+    text = original.replace("    command_delay_gait_steps: 0\n", "", 1)
+    assert text != original
     config = tmp_path / "robustness.yaml"
     config.write_text(text, encoding="utf-8")
 

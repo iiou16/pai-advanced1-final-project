@@ -44,3 +44,13 @@ def test_reset_replaces_pending_commands_with_stop_only_for_masked_envs() -> Non
 def test_invalid_delay_steps_is_rejected(delay_steps: object) -> None:
     with pytest.raises(InvalidCommandDelayError):
         CommandDelayLine(delay_steps, NUM_ENVS, "cpu")  # type: ignore[arg-type]
+
+
+def test_each_env_gets_back_its_own_commands() -> None:
+    line = CommandDelayLine(1, NUM_ENVS, "cpu")
+    commands = torch.tensor([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
+
+    line.push(commands)
+    delivered = line.push(torch.zeros(NUM_ENVS, 3))
+
+    assert torch.equal(delivered, commands)

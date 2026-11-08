@@ -41,7 +41,10 @@ class PushRobustnessCondition:
             raise InvalidPushConfigError("条件の name は空でない文字列が必要")
         _check.positive(f"{self.name}.box_mass_kg", self.box_mass_kg)
         _check.positive(f"{self.name}.box_friction", self.box_friction)
-        _check.non_negative(f"{self.name}.command_delay_gait_steps", self.command_delay_gait_steps)
+        delay = self.command_delay_gait_steps
+        if isinstance(delay, bool) or not isinstance(delay, int):
+            raise InvalidPushConfigError(f"{self.name}.command_delay_gait_steps は整数が必要: {delay!r}")
+        _check.non_negative(f"{self.name}.command_delay_gait_steps", delay)
 
 
 @dataclass(frozen=True)

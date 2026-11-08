@@ -9,6 +9,8 @@ import torch
 
 from cooperative_go2.entities.gait_config import ValueRange
 from cooperative_go2.entities.push_observation import PlanarBodyState, PushTaskSnapshot
+from cooperative_go2.entities.push_robustness import PushRobustnessCondition
+from cooperative_go2.entities.push_task_config import PushResetConfig
 from cooperative_go2.entities.push_termination import PushTerminationReason
 from cooperative_go2.entities.push_trial import (
     EmptyTrialSetError,
@@ -197,6 +199,24 @@ def test_store_writes_one_row_per_trial_with_requirement_columns(tmp_path: Path)
     assert int(rows[0]["sim_steps"]) == 250
     summary = json.loads((tmp_path / "e1-test" / "summary.json").read_text(encoding="utf-8"))
     assert summary["summary"]["success_rate"] == 1.0
+
+
+def test_store_writes_robustness_condition_to_summary(tmp_path: Path) -> None:
+    store = FilePushEvaluationStore(tmp_path / "robustness-test")
+    store.initialize()
+    reset = PushResetConfig(
+        box_xy_jitter_m=0.1, goal_distance_m=ValueRange(1.0, 1.0), goal_direction_deg=ValueRange(-60.0, 60.0)
+    )
+    condition = PushRobustnessCondition(
+        name="delay_0.10s", box_mass_kg=2.0, box_friction=1.0, reset=reset, command_delay_gait_steps=5
+    )
+    result = _result(PushTerminationReason.SUCCESS, 50, PlanarPose(2.0, 0.0, 0.0))
+
+    conditions = dataclasses.replace(_conditions(), robustness_condition=condition)
+    store.save(conditions, [result], summarize_push_trials([result], HIGH_LEVEL_PERIOD_S))
+
+    summary = json.loads((tmp_path / "robustness-test" / "summary.json").read_text(encoding="utf-8"))
+    assert summary["conditions"]["robustness_condition"] == dataclasses.asdict(condition)
 
 
 def test_store_refuses_to_overwrite_existing_output(tmp_path: Path) -> None:

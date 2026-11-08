@@ -167,7 +167,9 @@ def test_push_evaluation_with_box_friction_below_floor_exits_without_output(
 ) -> None:
     monkeypatch.chdir(REPO_ROOT)
     monkeypatch.setattr(evaluate_push, "OUTPUT_ROOT", tmp_path / "eval")
-    text = PUSH_ROBUSTNESS_CONFIG.read_text(encoding="utf-8").replace("box_friction: 1.0", "box_friction: 0.5", 1)
+    original = PUSH_ROBUSTNESS_CONFIG.read_text(encoding="utf-8")
+    text = original.replace("box_friction: 1.0", "box_friction: 0.5", 1)
+    assert text != original
     config = tmp_path / "robustness.yaml"
     config.write_text(text, encoding="utf-8")
 
