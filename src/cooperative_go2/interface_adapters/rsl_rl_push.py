@@ -92,5 +92,8 @@ class RslRlPushTrainerFactory:
         num_envs = settings.task.episode.num_envs
         simulation = GenesisPushSimulation.build(gait, self.scene, PushSceneRequest(num_envs, video=None))
         controller = load_gait_controller(gait_run_dir, settings.gait_policy.checkpoint, num_envs, gs.device)
-        setup = PushEnvSetup(settings.task, gait, self.scene.box.initial_xy_m, self.generator)
+        # 学習では速度指令を遅らせない（遅れは評価で頑健性を確かめるときだけ入れる）
+        setup = PushEnvSetup(
+            settings.task, gait, self.scene.box.initial_xy_m, self.generator, command_delay_gait_steps=0
+        )
         return RslRlPushTrainer(Go2PushEnv(setup, simulation, controller), settings, self.run_dir)

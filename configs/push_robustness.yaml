@@ -1,0 +1,160 @@
+# 1 台の箱押し（シーン S1_push）の頑健性の評価の条件。go2-evaluate-push の --robustness-config に渡し、
+# --condition で 1 つを選ぶ。評価の設定（configs/push_single_wide.yaml）の、箱の質量・摩擦と配置（task.reset）を
+# ここの値で置き換え、高レベル方策の速度指令を歩行方策に届くまで遅らせる。
+# nominal は学習時（第 2 段階）と同じ条件で、ほかの条件は nominal から 1 種類だけを変える。
+# すべてのキーが必須。読み込み時に過不足・型・値の範囲と、名前の重複を検証する。
+
+conditions:
+  - name: nominal
+    box_mass_kg: 2.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 0
+
+  # 箱の質量。学習時（2 kg）の半分から 2 倍まで
+  - name: mass_1kg
+    box_mass_kg: 1.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 0
+  - name: mass_3kg
+    box_mass_kg: 3.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 0
+  - name: mass_4kg
+    box_mass_kg: 4.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 0
+
+  # 箱の摩擦。接触する 2 面の摩擦は大きい方が使われるため、床（1.0）より小さくできない。
+  # 箱の表面の摩擦なので、箱と Go2 の間の摩擦も同じだけ上がる。
+  # 重心を水平に押すとき、摩擦係数が箱の幅 / 高さ（0.4 / 0.3 ≈ 1.33）を超えると箱は滑らずに倒れる
+  # （scripts/p6_robustness/probe_box_friction.py）。1.2・1.3 は重心を押せば滑る範囲、1.5・2.0 は倒れる範囲。
+  # Go2 は重心より高い位置を押すので、1.2・1.3 でも押している間の箱の前への傾きは学習時の条件より大きくなる
+  - name: friction_1.2
+    box_mass_kg: 2.0
+    box_friction: 1.2
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 0
+  - name: friction_1.3
+    box_mass_kg: 2.0
+    box_friction: 1.3
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 0
+  - name: friction_1.5
+    box_mass_kg: 2.0
+    box_friction: 1.5
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 0
+  - name: friction_2.0
+    box_mass_kg: 2.0
+    box_friction: 2.0
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 0
+
+  # 配置。箱の初期位置のずれ（x・y それぞれ ±値）。0.3 m でも箱の後面（x ≥ 0.5 m）は Go2 の前端（x ≈ 0.35 m）に触れない
+  - name: box_jitter_0.2m
+    box_mass_kg: 2.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.2
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 0
+  - name: box_jitter_0.3m
+    box_mass_kg: 2.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.3
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 0
+  # 目標までの距離（学習時は 1.0 m に固定）
+  - name: goal_distance_0.5-2.0m
+    box_mass_kg: 2.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 0.5, high: 2.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 0
+  # 目標の方向（学習時は ±60°）。箱の真横の目標まで含める
+  - name: goal_direction_90deg
+    box_mass_kg: 2.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -90.0, high: 90.0}
+    command_delay_gait_steps: 0
+
+  # 速度指令が歩行方策に届くまでの遅れ（歩行の制御周期 0.02 s の数）。ROS 2 の実行系で測った遅れは約 1 周期。
+  # 届いた指令は高レベル方策の周期（0.1 s）のあいだ使い続けるので、使う時点の指令の古さは遅れより最大 0.08 s 大きい。
+  # ROS 2 の実行系は古さが 0.3 s を超えた指令を捨てて止まるが、この評価は捨てずにそのまま使う（遅れそのものへの強さを
+  # 見るため）。そのため 0.30 s の条件は、ROS 2 の実行系なら止まる場面を含む
+  - name: delay_0.02s
+    box_mass_kg: 2.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 1
+  - name: delay_0.04s
+    box_mass_kg: 2.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 2
+  - name: delay_0.10s
+    box_mass_kg: 2.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 5
+  - name: delay_0.20s
+    box_mass_kg: 2.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 10
+  - name: delay_0.30s
+    box_mass_kg: 2.0
+    box_friction: 1.0
+    reset:
+      box_xy_jitter_m: 0.1
+      goal_distance_m: {low: 1.0, high: 1.0}
+      goal_direction_deg: {low: -60.0, high: 60.0}
+    command_delay_gait_steps: 15

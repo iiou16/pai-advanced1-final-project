@@ -223,6 +223,7 @@ def _conditions(args: argparse.Namespace, inputs: _Inputs) -> PushEvaluationCond
         gait_steps_per_high_level_step=task.gait_steps_per_high_level_step(inputs.gait.env.control_dt_s),
         # 並列環境は 1 つで、試行を続けて行う
         num_envs=1,
+        robustness_condition=None,
     )
 
 

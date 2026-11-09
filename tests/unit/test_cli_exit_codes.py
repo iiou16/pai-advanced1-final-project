@@ -8,7 +8,7 @@ import torch
 
 from conftest import REPO_ROOT
 
-from cooperative_go2.frameworks import evaluate_gait, evaluate_team_marl, train_gait, train_team_marl
+from cooperative_go2.frameworks import evaluate_gait, evaluate_push, evaluate_team_marl, train_gait, train_team_marl
 
 PUSH_MULTI_CONFIG = REPO_ROOT / "configs" / "push_multi.yaml"
 
@@ -122,4 +122,61 @@ def test_team_marl_evaluation_with_training_seed_exits_with_invalid_input(tmp_pa
         evaluate_team_marl.main(arguments)
 
     assert exc_info.value.code == evaluate_team_marl.EXIT_INVALID_INPUT
+    assert not (tmp_path / "eval").exists()
+
+
+PUSH_ROBUSTNESS_CONFIG = REPO_ROOT / "configs" / "push_robustness.yaml"
+
+
+def _evaluate_push_rule_based_arguments(*extra: str) -> list[str]:
+    return [
+        "--config", str(REPO_ROOT / "configs" / "push_single_wide.yaml"), "--algorithm", "rule_based",
+        "--num-envs", "1", "--seed", "2001", "--device", "cpu", "--run-name", "unused", *extra,
+    ]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        pytest.param(("--condition", "nominal"), id="condition-without-config"),
+        pytest.param(("--robustness-config", str(PUSH_ROBUSTNESS_CONFIG)), id="config-without-condition"),
+        pytest.param(
+            ("--robustness-config", str(PUSH_ROBUSTNESS_CONFIG), "--condition", "absent"), id="unknown-condition"
+        ),
+        pytest.param(
+            ("--robustness-config", str(PUSH_ROBUSTNESS_CONFIG), "--condition", "nominal", "--box-mass-kg", "3.0"),
+            id="with-box-mass-override",
+        ),
+    ],
+)
+def test_push_evaluation_with_invalid_robustness_arguments_exits_without_output(
+    extra: tuple[str, ...], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(REPO_ROOT)
+    monkeypatch.setattr(evaluate_push, "OUTPUT_ROOT", tmp_path)
+
+    with pytest.raises(SystemExit) as exc_info:
+        evaluate_push.main(_evaluate_push_rule_based_arguments(*extra))
+
+    assert exc_info.value.code == evaluate_push.EXIT_INVALID_INPUT
+    assert not (tmp_path / "unused").exists()
+
+
+def test_push_evaluation_with_box_friction_below_floor_exits_without_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(REPO_ROOT)
+    monkeypatch.setattr(evaluate_push, "OUTPUT_ROOT", tmp_path / "eval")
+    original = PUSH_ROBUSTNESS_CONFIG.read_text(encoding="utf-8")
+    text = original.replace("box_friction: 1.0", "box_friction: 0.5", 1)
+    assert text != original
+    config = tmp_path / "robustness.yaml"
+    config.write_text(text, encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exc_info:
+        evaluate_push.main(
+            _evaluate_push_rule_based_arguments("--robustness-config", str(config), "--condition", "nominal")
+        )
+
+    assert exc_info.value.code == evaluate_push.EXIT_INVALID_INPUT
     assert not (tmp_path / "eval").exists()

@@ -6,11 +6,17 @@
     uv run go2-evaluate-push --config configs/push_single.yaml --algorithm policy \\
         --policy-run-dir outputs/push/push-stage1 --checkpoint 500 \\
         --num-envs 64 --seed 2001 --device cuda --run-name e2-stage1 --video
+    uv run go2-evaluate-push --config configs/push_single_wide.yaml --algorithm policy \\
+        --policy-run-dir outputs/push/push-stage2-wide60 --checkpoint 200 \\
+        --robustness-config configs/push_robustness.yaml --condition delay_0.10s \\
+        --num-envs 64 --seed 2001 --device cuda --run-name e8-policy-delay_0.10s-seed2001
 
 結果は outputs/push_eval/<run-name>/ に、trials.csv（試行ごとに 1 行）と summary.json
 （条件と評価指標）として保存する。--video を付けると、環境 0 を追従した評価動画（video.mp4）も撮る。
 保存先が既にあれば上書きせずに止まる。評価の条件（配置・成功判定など）は --config から取る。
 --box-mass-kg を付けると、シーンの設定の箱の質量だけを置き換えて評価する（箱の質量を決める実験用）。
+--robustness-config と --condition を付けると、頑健性の評価の条件（箱の質量・摩擦・配置・速度指令の遅れ）で
+評価の設定を置き換えて評価する。--box-mass-kg とは同時に使えない。
 """
 
 import argparse
@@ -18,12 +24,16 @@ import dataclasses
 import logging
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import genesis as gs
 from genesis.utils.geom import default_friction
 
+from cooperative_go2.entities.command_delay import InvalidCommandDelayError
+from cooperative_go2.entities.config_validation import InvalidConfigError
 from cooperative_go2.entities.push_config import InvalidPushConfigError
+from cooperative_go2.entities.push_robustness import PushRobustnessCondition, UnknownRobustnessConditionError
 from cooperative_go2.entities.push_trial import PushEpisodeResult, summarize_push_trials
 from cooperative_go2.frameworks.genesis_runtime import init_genesis_on_cpu, init_genesis_on_cuda, make_seeded_generator
 from cooperative_go2.frameworks.git_revision import GitCommitUnavailableError, current_commit_sha
@@ -32,6 +42,7 @@ from cooperative_go2.interface_adapters.config_loader import (
     PushSceneSettings,
     PushTrainingSettings,
     load_gait_settings,
+    load_push_robustness_suite,
     load_push_scene_settings,
     load_push_training_settings,
 )
@@ -54,6 +65,10 @@ from cooperative_go2.interface_adapters.push_evaluation_store import (
     PushEvaluationConditions,
     PushEvaluationOutputExistsError,
 )
+from cooperative_go2.interface_adapters.push_robustness_settings import (
+    IneffectiveBoxFrictionError,
+    apply_robustness_condition,
+)
 from cooperative_go2.interface_adapters.rsl_rl_policy import CheckpointLoadError, CheckpointNotFoundError
 from cooperative_go2.use_cases.evaluate_push import EvaluationDidNotFinishError, PushCommandSource, evaluate_push
 from cooperative_go2.use_cases.simulation_errors import SimulationSetupError
@@ -74,11 +89,31 @@ EXIT_EVALUATION_DID_NOT_FINISH = 5
 EXIT_GIT_UNAVAILABLE = 6
 EXIT_VIDEO_RECORDING_FAILED = 7
 
+# 頑健性の評価の条件を指定しない通常の評価では、速度指令を遅らせない
+NO_COMMAND_DELAY_GAIT_STEPS = 0
+
 logger = logging.getLogger(__name__)
 
 
 class MissingPolicyArgumentsError(ValueError):
     """学習済みの方策を評価するのに、学習の出力先かチェックポイントが指定されていないことを表す。"""
+
+
+class InvalidRobustnessArgumentsError(ValueError):
+    """頑健性の評価の条件の指定が不正（設定と名前の片方だけ、--box-mass-kg との併用）であることを表す。"""
+
+
+@dataclass(frozen=True)
+class _EvaluationInputs:
+    settings: PushTrainingSettings
+    scene: PushSceneSettings
+    robustness_condition: PushRobustnessCondition | None
+
+    @property
+    def command_delay_gait_steps(self) -> int:
+        if self.robustness_condition is None:
+            return NO_COMMAND_DELAY_GAIT_STEPS
+        return self.robustness_condition.command_delay_gait_steps
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -94,6 +129,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--device", choices=sorted(DEVICES), required=True, help="Genesis を動かすデバイス")
     parser.add_argument("--run-name", required=True, help=f"評価の実行の名前。{OUTPUT_ROOT}/<run-name> に保存する")
     parser.add_argument("--box-mass-kg", type=float, help="シーンの設定の箱の質量 [kg] を置き換える（実験用）")
+    parser.add_argument(
+        "--robustness-config", type=Path, help="頑健性の評価の条件の一覧（configs/push_robustness.yaml 形式）"
+    )
+    parser.add_argument("--condition", help="--robustness-config の中の、評価する条件の名前")
     parser.add_argument("--video", action="store_true", help="環境 0 を追従した評価動画を撮る")
     return parser.parse_args(argv)
 
@@ -105,6 +144,26 @@ def _scene_settings(settings: PushTrainingSettings, box_mass_kg: float | None) -
     return dataclasses.replace(scene, box=dataclasses.replace(scene.box, mass_kg=box_mass_kg))
 
 
+def _find_robustness_condition_or_none(args: argparse.Namespace) -> PushRobustnessCondition | None:
+    if (args.robustness_config is None) != (args.condition is None):
+        raise InvalidRobustnessArgumentsError("--robustness-config と --condition は両方を指定する")
+    if args.robustness_config is None:
+        return None
+    if args.box_mass_kg is not None:
+        raise InvalidRobustnessArgumentsError("--box-mass-kg と --robustness-config は同時に使えない")
+    return load_push_robustness_suite(args.robustness_config).get_condition(args.condition)
+
+
+def _evaluation_inputs(args: argparse.Namespace) -> _EvaluationInputs:
+    settings = load_push_training_settings(args.config)
+    scene = _scene_settings(settings, args.box_mass_kg)
+    condition = _find_robustness_condition_or_none(args)
+    if condition is None:
+        return _EvaluationInputs(settings, scene, robustness_condition=None)
+    applied = apply_robustness_condition(settings, scene, condition, default_friction())
+    return _EvaluationInputs(applied.settings, applied.scene, robustness_condition=condition)
+
+
 def _command_source(args: argparse.Namespace, settings: PushTrainingSettings) -> PushCommandSource:
     if args.algorithm == ALGORITHM_RULE_BASED:
         return RuleBasedCommandSource(settings.rule_based, settings.task.success.goal_radius_m)
@@ -114,8 +173,10 @@ def _command_source(args: argparse.Namespace, settings: PushTrainingSettings) ->
 
 
 def _evaluate(
-    args: argparse.Namespace, settings: PushTrainingSettings, scene: PushSceneSettings, output_dir: Path
+    args: argparse.Namespace, inputs: _EvaluationInputs, output_dir: Path
 ) -> tuple[tuple[PushEpisodeResult, ...], Go2PushEnv]:
+    settings = inputs.settings
+    scene = inputs.scene
     run_dir = Path(settings.gait_policy.run_dir)
     gait = load_gait_settings(run_dir / RUN_CONFIG_FILENAME).gait
     task = dataclasses.replace(
@@ -127,7 +188,8 @@ def _evaluate(
     video = PushVideoSpec(VIDEO_CAMERA, VIDEO_LOOKAT_OFFSET_M, task.success.goal_radius_m) if args.video else None
     simulation = GenesisPushSimulation.build(gait, scene, PushSceneRequest(args.num_envs, video))
     controller = load_gait_controller(run_dir, settings.gait_policy.checkpoint, args.num_envs, gs.device)
-    env = Go2PushEnv(PushEnvSetup(task, gait, scene.box.initial_xy_m, generator), simulation, controller)
+    setup = PushEnvSetup(task, gait, scene.box.initial_xy_m, generator, inputs.command_delay_gait_steps)
+    env = Go2PushEnv(setup, simulation, controller)
     environment = Go2PushEvaluationEnvironment(env)
     if not args.video:
         return evaluate_push(environment, source, time.perf_counter), env
@@ -140,8 +202,9 @@ def _evaluate(
 
 
 def _conditions(
-    args: argparse.Namespace, commit_sha: str, scene: PushSceneSettings, env: Go2PushEnv
+    args: argparse.Namespace, commit_sha: str, inputs: _EvaluationInputs, env: Go2PushEnv
 ) -> PushEvaluationConditions:
+    scene = inputs.scene
     checkpoint = None if args.algorithm == ALGORITHM_RULE_BASED else f"{args.policy_run_dir}/model_{args.checkpoint}.pt"
     return PushEvaluationConditions(
         run_id=args.run_name,
@@ -156,6 +219,7 @@ def _conditions(
         high_level_period_s=env.cfg.episode.high_level_period_s,
         gait_steps_per_high_level_step=env.gait_steps_per_high_level_step,
         num_envs=args.num_envs,
+        robustness_condition=inputs.robustness_condition,
     )
 
 
@@ -164,10 +228,12 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     args = _parse_args(argv)
     try:
-        settings = load_push_training_settings(args.config)
-        scene = _scene_settings(settings, args.box_mass_kg)
+        inputs = _evaluation_inputs(args)
         commit_sha = current_commit_sha()
-    except (FileNotFoundError, ConfigValidationError) as error:
+    # InvalidConfigError は設定の値の検証の失敗（--box-mass-kg や頑健性の条件で置き換えた箱の質量・摩擦が、
+    # シーンの設定の値域を外れたときなど）
+    except (FileNotFoundError, ConfigValidationError, InvalidConfigError, InvalidRobustnessArgumentsError,
+            UnknownRobustnessConditionError, IneffectiveBoxFrictionError) as error:  # fmt: skip
         logger.error("評価の条件が不正: %s", error)
         sys.exit(EXIT_INVALID_INPUT)
     except GitCommitUnavailableError as error:
@@ -183,9 +249,10 @@ def main(argv: list[str] | None = None) -> None:
 
     left = f"（保存先 {output_dir} は途中のまま残っている。削除してから再実行する）"
     try:
-        results, env = _evaluate(args, settings, scene, output_dir)
+        results, env = _evaluate(args, inputs, output_dir)
     except (FileNotFoundError, ConfigValidationError, InvalidPushConfigError, MissingPolicyArgumentsError,
-            PolicyConditionMismatchError, CheckpointNotFoundError, CheckpointLoadError) as error:  # fmt: skip
+            PolicyConditionMismatchError, CheckpointNotFoundError, CheckpointLoadError,
+            InvalidCommandDelayError) as error:  # fmt: skip
         logger.error("評価の条件が不正: %s%s", error, left)
         sys.exit(EXIT_INVALID_INPUT)
     except SimulationSetupError as error:
@@ -200,7 +267,7 @@ def main(argv: list[str] | None = None) -> None:
 
     summary = summarize_push_trials(results, env.cfg.episode.high_level_period_s)
     logger.info("評価指標: %s", summary)
-    store.save(_conditions(args, commit_sha, scene, env), results, summary)
+    store.save(_conditions(args, commit_sha, inputs, env), results, summary)
     logger.info("評価結果を保存した: %s", output_dir)
 
 

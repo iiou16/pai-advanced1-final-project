@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from cooperative_go2.entities.push_robustness import PushRobustnessCondition
 from cooperative_go2.entities.push_trial import PushEpisodeResult, PushTrialSummary
 
 TRIALS_FILENAME = "trials.csv"
@@ -61,6 +62,8 @@ class PushEvaluationConditions:
         high_level_period_s: 高レベル方策の周期 [s]。
         gait_steps_per_high_level_step: 高レベル方策の 1 ステップで物理を進める回数。
         num_envs: 並列環境の数（= 試行の数）。
+        robustness_condition: 頑健性の評価で変えた条件（質量・摩擦・配置・速度指令の遅れ）。評価の設定のままなら None。
+            summary.json にだけ書く（試行ごとの配置と質量・摩擦は trials.csv の各行にもある）。
     """
 
     run_id: str
@@ -74,6 +77,7 @@ class PushEvaluationConditions:
     high_level_period_s: float
     gait_steps_per_high_level_step: int
     num_envs: int
+    robustness_condition: PushRobustnessCondition | None
 
 
 class FilePushEvaluationStore:
