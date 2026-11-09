@@ -4,7 +4,65 @@ Physical AI 応用編1 知能ロボティクス講座（2026 Summer）最終課�
 
 課題テーマ: **AI×ロボティクスによる創造的タスクの実現**
 
-> 作業中です。タスク内容・実行方法は実装に合わせて追記します。
+四足歩行ロボット Unitree Go2 が、障害物を「避ける」のではなく「動かして」環境を変える。シミュレータ Genesis の上で、
+1 台の Go2 が箱を目標へ押すことと、1 台では動かせない重い箱でふさがれた通路を 2 台が協調して押し開けることを、強化学習と ROS 2 で実現した。
+実機での検証は対象外。
+
+## 概要
+
+方策を 2 層に分けている。下の層の歩行方策は速度指令 `[vx, vy, yaw_rate]` に追従して 12 関節を動かす（50 Hz）。
+上の層の高レベル方策は、箱と目標の位置から速度指令を決める（10 Hz）。歩行方策は 1 回学習して固定し、すべての段階で使い回す。
+
+| 段階 | 内容 | 主な結果（学習に使っていないシードでの評価） |
+|---|---|---|
+| 歩行 | 停止・前進・旋回・後退・横移動の指令に追従する歩行方策（PPO） | 指令ごとの速度の追従誤差 0.04 m/s 以下・転倒 0 % |
+| 1 台の箱押し | 2 kg の箱を 1 m 先の目標（方向 ±60°）へ押す高レベル方策（PPO） | 成功率 100 %（192 試行）。規則ベースの制御は 53〜70 % |
+| ROS 2 での実行 | シミュレーション・歩行方策・高レベル方策を別々のノードにし、ROS 2 の通信だけでつなぐ | 同じ初期条件で成功率 100 %（推論のスレッドを 1 本にした後）。方策のノードを止めるとロボットは止まる |
+| 2 台の規則ベースの協調 | 5 kg の箱でふさがれた通路を、2 台が状態を伝え合って押し開ける | 1 台は 0/16。2 台の協調は 19/32 で、押し始めをそろえて箱の回転を抑えた |
+| 2 台の協調学習 | IPPO・MAPPO（skrl）で協調を学習し、ROS 2 のノードで動かす | MAPPO（別々）は 32/32・成功までの平均 8.2 s。箱の回転は規則ベースの協調（E5）より大きい |
+| 頑健性の評価 | 1 台の箱押しの方策を、箱の質量・摩擦・配置・速度指令の遅れを 1 種類ずつ変えて評価する | 箱のずれ・目標の方向（±90°）と 0.2 s までの遅れでは 96 % 以上。4 kg の箱は 39.6 %、摩擦 1.2 の箱は 34.9 % |
+
+ノード構成・比べた条件・数値の詳細は、下の各節に書いた。
+
+## リポジトリの構成
+
+| パス | 内容 |
+|---|---|
+| `src/cooperative_go2/` | 本体。Clean Architecture の 4 層（`entities` → `use_cases` → `interface_adapters` → `frameworks`）に分ける。報酬・観測・成功判定などの計算は `entities` にあり、Genesis・RSL-RL・skrl・ROS 2 に依存しない（テンソルの計算に PyTorch だけを使う） |
+| `configs/` | 学習・評価・シーン・ROS 2 の設定。すべてのキーが必須で、読み込み直後に検証する |
+| `ros2_ws/` | 独自の ROS 2 のメッセージ・アクション（`go2_interfaces`）と launch |
+| `scripts/` | 環境の確認・物理の確認・評価をまとめて流すスクリプト |
+| `tests/` | ユニットテスト（`tests/unit`）と ROS 2 のメッセージを使うテスト（`tests/ros2`） |
+
+## 推論だけで評価シーンを再実行する
+
+学習をせずに、配布している学習済みモデルで評価シーンを流す手順。下の「セットアップ」と「学習済みモデルの取得」を済ませてから、
+リポジトリのルートで実行する。ROS 2 を使う手順の前に、ros2_ws を 1 回ビルドする（下のコマンドの中にある）。結果は `outputs/` の下に保存される（保存先が既にあれば上書きせずに止まる）。
+
+```bash
+source scripts/setup/env.sh
+
+# 1 台の箱押し（ROS 2 を通さない並列環境、64 試行。--video で評価動画も撮る）
+uv run --frozen go2-evaluate-push --config configs/push_single_wide.yaml --algorithm policy \
+    --policy-run-dir outputs/push/push-stage2-wide60 --checkpoint 200 \
+    --num-envs 64 --seed 2001 --device cuda --run-name e2-wide60-seed2001 --video
+
+# 以降は ROS 2 を使う。初回は ros2_ws をビルドする（venv を外してビルドする。独自の msg・action が入る）
+bash scripts/setup/build_ros2_ws.sh
+source /opt/ros/jazzy/setup.bash
+source ros2_ws/install/setup.bash
+
+# 1 台の箱押しを ROS 2 の 3 ノードで流す
+ros2 launch ros2_ws/launch/push_single.launch.py seed:=2001 num_trials:=64 run_name:=e2-ros2-wide60-seed2001 \
+    device:=cuda video:=false record_bag:=true
+
+# 2 台の通路の開通を、規則ベースの協調（E5）と、学習した協調（MAPPO・別々）で流す
+ros2 launch ros2_ws/launch/team.launch.py mode:=cooperative seed:=6001 num_trials:=16 run_name:=e5-seed6001 device:=cpu
+ros2 launch ros2_ws/launch/team.launch.py mode:=learned policy_run_dir:=outputs/team_marl/mappo-separate-seed21 \
+    policy_iteration:=1000 seed:=6001 num_trials:=16 run_name:=learned-mappo-separate-seed6001 device:=cpu
+```
+
+学習からやり直す手順は、段階ごとの節（「歩行方策の学習と評価」「箱押しの高レベル方策の学習と評価」「2 台の協調学習（IPPO・MAPPO）と比較」）に書いた。
 
 ## セットアップ
 
@@ -54,22 +112,37 @@ uv run --frozen go2-evaluate-gait --run-dir outputs/gait/gait-command-tracking -
 
 ## 学習済みモデルの取得
 
-学習済みの歩行方策と箱押しの方策は、GitHub の Release（タグ `v0.2.0`）で配布している。学習をせずに評価だけを再現するときは、次の手順で `outputs/` に置く。
+学習済みのモデルは GitHub の Release で配布している。歩行方策と 1 台の箱押しの方策はタグ `v0.2.0`、
+2 台の協調の方策（IPPO・MAPPO）はタグ `v0.3.0` にある。学習をせずに評価だけを再現するときは、次の手順で `outputs/` に置く。
 
 ```bash
 # Release の添付ファイルを取得する（gh を使わない場合は Release のページから同じファイルをダウンロードする）
 gh release download v0.2.0 -R iiou16/pai-advanced1-final-project -p '*.tar.gz' -D outputs/release
+gh release download v0.3.0 -R iiou16/pai-advanced1-final-project -p '*.tar.gz' -D outputs/release
+
+# 展開する。展開先が既にあれば止まる（手元で学習した結果を上書きしたり、配布物と混ぜたりしないため）
+extract_release() {  # extract_release <アーカイブ> <展開先の親> <展開されるディレクトリ名>
+    if [ -e "$2/$3" ]; then echo "展開先が既にある: $2/$3（中身を確かめてから移すか消す）" >&2; return 1; fi
+    tar -xzf "$1" -C "$2"
+}
+mkdir -p outputs/gait outputs/push outputs/team_marl
 
 # 歩行方策（model_1500.pt と学習時の設定 gait.yaml）→ outputs/gait/gait-command-tracking/
-mkdir -p outputs/gait outputs/push
-tar -xzf outputs/release/gait-command-tracking.tar.gz -C outputs/gait
+extract_release outputs/release/gait-command-tracking.tar.gz outputs/gait gait-command-tracking
 
 # 箱押しの方策（model_200.pt と学習時の設定 push_single.yaml・scene.yaml）→ outputs/push/push-stage2-wide60/
-tar -xzf outputs/release/push-stage2-wide60.tar.gz -C outputs/push
+extract_release outputs/release/push-stage2-wide60.tar.gz outputs/push push-stage2-wide60
+
+# 2 台の協調の方策（1000 回目の更新のチェックポイント checkpoints/agent_24000.pt と、学習時の設定 push_multi.yaml・scene.yaml・
+# 学習方式 variant.json）→ outputs/team_marl/{mappo-separate-seed21,mappo-shared-seed21,ippo-shared-seed21}/
+for run in mappo-separate-seed21 mappo-shared-seed21 ippo-shared-seed21; do
+    extract_release outputs/release/${run}.tar.gz outputs/team_marl ${run}
+done
 ```
 
 - 歩行方策は `configs/push_single.yaml` の `gait_policy`（`outputs/gait/gait-command-tracking` の `model_1500.pt`）から読み込む。
 - 箱押しの方策は、下の評価のコマンドで `--policy-run-dir outputs/push/push-stage2-wide60 --checkpoint 200` を指定して使う。
+- 2 台の協調の方策は、`policy_run_dir:=outputs/team_marl/<run> policy_iteration:=1000` を指定して使う。
 
 ## 箱押しの高レベル方策の学習と評価
 
@@ -83,7 +156,8 @@ uv run --frozen python scripts/p2_scene_check/check_s1_push_scene.py
 
 # 学習（出力: outputs/push/<run-name>/。チェックポイント（50 反復ごと）・TensorBoard のログ・設定の写し）
 #   目標が箱の正面にある配置（configs/push_single.yaml）と、目標の方向を ±60° に広げた配置
-#   （configs/push_single_wide.yaml）の 2 通りがある。配布しているモデルは後者の 200 反復目（model_200.pt）
+#   （configs/push_single_wide.yaml）の 2 通りがある。配布しているモデルは後者の 200 反復目（model_200.pt）。
+#   設定は 301 反復だが、約 50 反復で成功の割合が 99 % を超えたので、201 反復（約 18 分）で止めた
 uv run --frozen go2-train-push --config configs/push_single_wide.yaml --run-name push-stage2-wide60
 
 # 評価（出力: outputs/push_eval/<run-name>/。--video で環境 0 を追従した評価動画も撮る）
@@ -329,7 +403,7 @@ uv run python scripts/p5_marl_check/compare_ros2_team_runs.py --output outputs/p
     --method "E5=e5-seed6001,e5-seed6001-rerun" --method "MAPPO・別々=learned-mappo-separate-seed6001,learned-mappo-separate-seed6001-rerun"
 ```
 
-- 学習した協調の方策のチェックポイントは配布していない（上の手順で学習し直す）。
+- 学習した協調の方策は、上の「学習済みモデルの取得」の `v0.3.0` で配布している（MAPPO・別々、MAPPO・共有、IPPO・共有の 1000 回目の更新）。
 - ROS 2 を経由して、E3〜E7 を同じ条件・同じコードで比べた（シード 6001 の 16 試行を 2 回、E3 は 1 回。Genesis は CPU。
   E3〜E5 もこのコードで流し直したので、上の規則ベースの表と少し違う）。学習はどれもシード 21・1000 回の更新:
 
@@ -355,6 +429,52 @@ uv run python scripts/p5_marl_check/compare_ros2_team_runs.py --output outputs/p
 - 回転の減点を 5 倍にした設定（`configs/push_multi_rotation.yaml`）で MAPPO（別々）を学習し直しても、ROS 2 で成功 31/32・
   回転の最大は平均 35°（全体 86°）で回転は減らず、成功までの平均は 10.7 s に延びた。
 
+## 計算資源
+
+計算機は Ubuntu 24.04（WSL2）・NVIDIA RTX 2080 Ti（11 GB）・8 コアの CPU。
+
+**学習**
+
+| 項目 | 歩行方策 | 1 台の箱押し（第 2 段階） | 2 台の協調学習 |
+|---|---|---|---|
+| 並列環境の数 | 4096 | 1024 | 1024（各 2 台） |
+| 学習の長さ | 1501 反復 | 201 反復（設定の 301 反復の途中で止めた） | 1000 回の更新 |
+| 学習時間 | 28 分 | 18 分 | 2 時間 43 分〜2 時間 48 分（IPPO・MAPPO の 3 方式） |
+| シミュレーションの速さ（制御周期 0.02 s の物理ステップ × 環境の数 / 秒） | 約 86,000 | 約 23,000 | 約 13,000 |
+| 実時間比（シミュレーション時間 / 実時間） | 約 1,700 倍 | 約 460 倍 | 約 250 倍 |
+| VRAM の最大値（学習を始める前からの増分） | 1.8 GiB | 1.0 GiB | 1.6 GiB |
+
+- 速さと実時間比は、学習時間全体（方策の更新を含む）の平均。学習時間は TensorBoard のログの最初と最後の記録の時刻の差。
+- VRAM は、同じ並列環境の数で 20〜30 回の短い学習を流して測った。WSL2 ではプロセスごとの使用量を取れないので、
+  GPU 全体の使用量の、学習を始める前（2.9 GiB）からの増分で表す。
+
+**ROS 2 の実行**（評価のプロセスだけを動かした状態）
+
+| 項目 | 1 台の箱押し（Genesis は GPU） | 2 台の通路の開通（Genesis は CPU） |
+|---|---|---|
+| 実時間比 | 0.67〜0.69 | 0.91〜0.93（上限を 1.0 にしている） |
+| 状態の配信から、その状態で作った関節目標が届くまで | 平均 7.7〜8.3 ms・95 パーセンタイル 16〜19 ms | 平均 7.1〜9.1 ms・95 パーセンタイル 17〜23 ms |
+| 歩行方策の推論 | 平均 0.40 ms | 平均 0.34〜0.39 ms |
+| 高レベル方策の判断 | 平均 0.8 ms | 規則ベース 平均 1.4〜2.8 ms・学習した方策 平均 3.0〜3.4 ms |
+
+- 2 台の値は、E3〜E7 の比較に使った 11 回の実行（規則ベース 5 回・学習した方策 6 回）の範囲。規則ベースの判断は、1 台と通信なし（E3・E4）が
+  1.4〜1.9 ms、協調（E5）が 2.4〜2.8 ms。
+- 2 台の Genesis を CPU で動かすのは、並列環境 1 つでは GPU の方が遅く、実時間比が 0.38 まで下がったため。
+- 1 台の箱押しで CPU に負荷をかけた状態（CPU を使い続けるプロセスを 6 本）では、実時間比 0.52〜0.56、往復の 95 パーセンタイル 31〜34 ms。
+
+## 既知の制約
+
+- すべてシミュレーションの中での結果で、実機では確かめていない。
+- 箱の位置・速度と、ロボットと箱の接触は、シミュレーションの真値をそのまま配信している（`/team/object_state`・`box_contact`）。実機ではカメラなどでの推定が要る。
+- ROS 2 のノードは 1 台の計算機の上で動かした。ノード間の通信は同じ計算機の中に限られる。
+- ROS 2 の実行系は方策の応答を待たずに物理を進めるので、同じシード・同じ開始位置でも実行ごとに結果が変わる。比較は試行ごとではなく、試行の割合で行う。
+- 評価は平らな床で、外乱が無い条件に限られる。段差・坂・外乱への強さは確かめていない。
+- 箱の摩擦は、床の摩擦（1.0）より下げられない（Genesis は接触する 2 面の摩擦の大きい方を使う）。
+- 1 台の箱押しの目標の方向は ±60° で学習した。箱の真横や後ろの目標のように、大きく回り込む配置は学習していない。
+- 1 台の箱押しの方策は、学習時（2 kg・摩擦 1.0）より重い箱や摩擦の大きい箱に弱い（「1 台の箱押しの頑健性の評価」の節）。
+- 2 台の協調学習は、どの方式も学習のシードが 1 つで、シード間のばらつきは測っていない。学習した協調は、規則ベースの協調より箱を大きく回す。
+- 動作を確かめた環境は Ubuntu 24.04（WSL2）＋ NVIDIA RTX 2080 Ti。ほかの GPU・OS では確かめていない。
+
 ## テスト
 
 ```bash
@@ -371,6 +491,18 @@ uv run --frozen pytest tests/ros2
 |---|---|---|---|
 | Go2 の歩行学習の環境・報酬・PPO の設定 | Genesis 公式の例 `examples/locomotion/`（[genesis-world](https://github.com/Genesis-Embodied-AI/genesis-world) v1.4.5） | Apache-2.0 | コードは複製せず、観測・報酬の構成と初期値を参考に `src/cooperative_go2/` で実装した |
 | Go2 の URDF・平面の URDF | genesis-world パッケージ同梱のアセット | 同梱物に個別の表記なし（原典のライセンスは未確認） | パッケージから実行時に読み込む。本リポジトリには含めない |
+| PPO の実装 | [RSL-RL](https://github.com/leggedrobotics/rsl_rl)（rsl-rl-lib 5.5.2） | BSD-3-Clause | ライブラリとして使う（歩行方策と 1 台の箱押しの方策） |
+| IPPO・MAPPO の実装 | [skrl](https://github.com/Toni-SM/skrl) 2.1.1 | MIT | ライブラリとして使う（2 台の協調学習）。Genesis の並列環境との接続は自作した |
+| ROS 2 との接続 | [genesis_ros](https://github.com/signalbotics/genesis_ros) を調べた | — | 関節目標を制御周期ごとに受けて学習時と同じ遅れで適用する経路が無かったため採用せず、`rclpy` で自作した。カメラなどのセンサを配信する機能は持つので、センサと連携する段階で、配信の部分の採用を改めて検討する |
+
+本プロジェクトで独自に作ったもの:
+
+- 歩行方策の速度指令の範囲を広げ、停止とその場旋回の指令を意図的に混ぜた学習（公式の例は前進 0.5 m/s に固定）
+- 箱押しのシーン・通路のシーンと、報酬・観測・成功判定・終了判定、規則ベースの制御（1 台・2 台の協調）
+- 箱を置くシーンの摩擦円錐を `elliptic` にした物理の設定と、その確認のスクリプト
+- ROS 2 のノード（シミュレーション・歩行方策・高レベル方策・タスク管理）、独自のメッセージ・アクション、launch
+- 2 台の協調学習の環境（通信の遅れと欠落の模擬を含む）と、学習した方策を ROS 2 で動かす判断
+- 評価と記録（同じシードで同じ初期条件にする評価、ROS 2 の経路の計測、頑健性の評価）
 
 ## ライセンス
 
